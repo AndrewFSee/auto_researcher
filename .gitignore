@@ -1,0 +1,168 @@
+# ============================================
+# Auto Researcher - Git Ignore Configuration
+# ============================================
+
+# -----------------------------
+# Environment & Secrets
+# -----------------------------
+.env
+.env.local
+.env.*.local
+*.env
+secrets.yaml
+secrets.json
+
+# -----------------------------
+# Python
+# -----------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# -----------------------------
+# Virtual Environments
+# -----------------------------
+.venv/
+venv/
+ENV/
+env/
+.env.bak/
+.venv.bak/
+
+# -----------------------------
+# Testing & Coverage
+# -----------------------------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+
+# -----------------------------
+# Type Checking & Linting
+# -----------------------------
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# -----------------------------
+# IDE & Editors
+# -----------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------
+# Data Files (Cannot Redistribute)
+# -----------------------------
+data/
+findata/
+*.db
+*.sqlite
+*.sqlite3
+
+# Downloaded/cached price data
+price_cache/
+*.parquet
+
+# Model artifacts (regeneratable)
+*.joblib
+*.pkl
+*.pickle
+
+# -----------------------------
+# Results & Outputs
+# -----------------------------
+results/
+logs/
+*.log
+
+# Backtest output files
+*_output.txt
+*_results.csv
+*_results.parquet
+
+# Generated reports
+research_report.md
+recommendations_*.md
+
+# Hyperparameter search outputs
+hyperparam_search_*.csv
+*_optimization_*.json
+best_hyperparams_*.txt
+
+# Feature analysis
+feature_importance.csv
+feature_stability_*.csv
+
+# -----------------------------
+# Scripts - Generated Outputs
+# -----------------------------
+scripts/fcf_fixed_results.csv
+scripts/fcf_polygon_results.csv
+scripts/pead_enhanced_results.csv
+
+# -----------------------------
+# Docker
+# -----------------------------
+*.tar
+docker-compose.override.yml
+
+# -----------------------------
+# Jupyter Notebooks
+# -----------------------------
+.ipynb_checkpoints/
+*.ipynb_checkpoints/
+
+# -----------------------------
+# OS Generated
+# -----------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# -----------------------------
+# Misc
+# -----------------------------
+*.bak
+*.tmp
+*.temp
+.cache/
+tmp/
+temp/

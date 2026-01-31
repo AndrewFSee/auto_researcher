@@ -1,0 +1,217 @@
+# Auto Researcher - Docker Compose Configuration
+# 
+# Usage:
+#   Development:  docker-compose up -d
+#   Production:   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#   Testing:      docker-compose run --rm app pytest
+
+version: '3.8'
+
+services:
+  # ==========================================================================
+  # Main Application
+  # ==========================================================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: auto_researcher
+    restart: unless-stopped
+    
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATA_DIR=/app/data
+      - CACHE_DIR=/app/cache
+      - DATABASE_URL=postgresql://researcher:${DB_PASSWORD:-researcher}@db:5432/auto_researcher
+      - REDIS_URL=redis://redis:6379/0
+      # API Keys (from .env file)
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ALPHA_VANTAGE_KEY=${ALPHA_VANTAGE_KEY}
+    
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+      - ./configs:/app/configs:ro
+    
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    
+    networks:
+      - researcher-network
+    
+    healthcheck:
+      test: ["CMD", "python", "-c", "import auto_researcher; print('ok')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ==========================================================================
+  # PostgreSQL Database
+  # ==========================================================================
+  db:
+    image: postgres:15-alpine
+    container_name: researcher_db
+    restart: unless-stopped
+    
+    environment:
+      POSTGRES_USER: researcher
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-researcher}
+      POSTGRES_DB: auto_researcher
+    
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init_db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    
+    ports:
+      - "5432:5432"
+    
+    networks:
+      - researcher-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U researcher -d auto_researcher"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Redis Cache
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: researcher_redis
+    restart: unless-stopped
+    
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    
+    volumes:
+      - redis_data:/data
+    
+    ports:
+      - "6379:6379"
+    
+    networks:
+      - researcher-network
+    
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Scheduler (for periodic jobs)
+  # ==========================================================================
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: researcher_scheduler
+    restart: unless-stopped
+    
+    command: python -m auto_researcher.scheduler
+    
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DATABASE_URL=postgresql://researcher:${DB_PASSWORD:-researcher}@db:5432/auto_researcher
+      - REDIS_URL=redis://redis:6379/0
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./cache:/app/cache
+    
+    depends_on:
+      - app
+      - db
+      - redis
+    
+    networks:
+      - researcher-network
+
+  # ==========================================================================
+  # Development Services
+  # ==========================================================================
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: researcher_dev
+    
+    command: sleep infinity
+    
+    environment:
+      - LOG_LEVEL=DEBUG
+      - DATABASE_URL=postgresql://researcher:${DB_PASSWORD:-researcher}@db:5432/auto_researcher
+      - REDIS_URL=redis://redis:6379/0
+    
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+    
+    depends_on:
+      - db
+      - redis
+    
+    networks:
+      - researcher-network
+    
+    profiles:
+      - dev
+
+  # ==========================================================================
+  # Jupyter Notebook
+  # ==========================================================================
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: development
+    container_name: researcher_jupyter
+    
+    command: jupyter notebook --ip=0.0.0.0 --port=8888 --no-browser --allow-root
+    
+    environment:
+      - DATABASE_URL=postgresql://researcher:${DB_PASSWORD:-researcher}@db:5432/auto_researcher
+    
+    volumes:
+      - .:/app
+      - ./notebooks:/app/notebooks
+      - ./data:/app/data
+    
+    ports:
+      - "8888:8888"
+    
+    depends_on:
+      - db
+    
+    networks:
+      - researcher-network
+    
+    profiles:
+      - dev
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  researcher-network:
+    driver: bridge
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  postgres_data:
+  redis_data:
