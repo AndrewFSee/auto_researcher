@@ -1,0 +1,14 @@
+[server]
+headless = true
+runOnSave = false
+maxUploadSize = 200
+maxMessageSize = 200
+# Disable file watcher — prevents script reruns when pipeline writes files
+fileWatcherType = "none"
+
+[runner]
+# Don't re-run script on widget interaction during pipeline execution
+fastReruns = false
+
+[browser]
+gatherUsageStats = false

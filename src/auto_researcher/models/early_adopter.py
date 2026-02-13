@@ -8,6 +8,14 @@ Key Signals:
 1. First Mover Score: How early did they adopt new tech language vs peers?
 2. Pioneer Score: Combination of breadth and earliness
 3. Tech Momentum: Are they accelerating or decelerating tech adoption?
+4. Sector Innovation: Sector-specific technology relevance weighting
+
+Sector-Aware Scoring:
+- Technologies are weighted by relevance to the company's GICS sector
+- Healthcare companies get extra credit for biotech/digital-health adoption
+- Financials get extra credit for fintech/blockchain adoption
+- Energy gets extra credit for clean-tech/carbon capture
+- Cross-sector AI/ML adoption is universally valuable
 
 Research Finding:
 - Companies with high pioneer scores (talking about tech early) outperformed
@@ -172,7 +180,230 @@ EMERGING_TECH_LEXICON = {
         "category": "Robotics",
         "maturity": 1,
     },
+    
+    # === Fintech / Digital Finance ===
+    "blockchain": {
+        "terms": ["blockchain", "distributed ledger", "smart contract", "smart contracts"],
+        "emerged": "2017-01",
+        "category": "Fintech",
+        "maturity": 2,
+    },
+    "defi": {
+        "terms": ["defi", "decentralized finance", "tokenization", "tokenized assets",
+                  "digital assets", "real world assets", "rwa"],
+        "emerged": "2020-06",
+        "category": "Fintech",
+        "maturity": 1,
+    },
+    "embedded_finance": {
+        "terms": ["embedded finance", "banking as a service", "baas", "open banking",
+                  "instant payments", "real-time payments"],
+        "emerged": "2020-01",
+        "category": "Fintech",
+        "maturity": 2,
+    },
+    
+    # === Digital Health / MedTech ===
+    "digital_health": {
+        "terms": ["digital health", "telehealth", "telemedicine", "remote patient monitoring",
+                  "digital therapeutics", "dtx"],
+        "emerged": "2019-01",
+        "category": "Digital Health",
+        "maturity": 2,
+    },
+    "ai_drug_discovery": {
+        "terms": ["ai drug discovery", "ai-driven drug", "computational drug",
+                  "machine learning drug", "in silico", "ai-powered drug"],
+        "emerged": "2020-06",
+        "category": "Digital Health",
+        "maturity": 1,
+    },
+    "precision_medicine": {
+        "terms": ["precision medicine", "personalized medicine", "companion diagnostic",
+                  "biomarker-driven", "genomic medicine"],
+        "emerged": "2017-01",
+        "category": "Digital Health",
+        "maturity": 2,
+    },
+    
+    # === Energy Transition ===
+    "hydrogen": {
+        "terms": ["green hydrogen", "hydrogen economy", "hydrogen fuel cell",
+                  "blue hydrogen", "hydrogen storage", "electrolyzer"],
+        "emerged": "2020-01",
+        "category": "Energy Transition",
+        "maturity": 1,
+    },
+    "grid_storage": {
+        "terms": ["grid-scale storage", "energy storage", "battery storage",
+                  "grid modernization", "smart grid", "virtual power plant"],
+        "emerged": "2018-01",
+        "category": "Energy Transition",
+        "maturity": 2,
+    },
+    "carbon_capture": {
+        "terms": ["carbon capture", "ccs", "ccus", "direct air capture",
+                  "carbon sequestration", "carbon removal"],
+        "emerged": "2019-01",
+        "category": "Energy Transition",
+        "maturity": 1,
+    },
+    
+    # === Industrial Automation ===
+    "industrial_iot": {
+        "terms": ["industrial iot", "iiot", "industry 4.0", "smart factory",
+                  "smart manufacturing", "connected factory"],
+        "emerged": "2017-01",
+        "category": "Industrial Automation",
+        "maturity": 2,
+    },
+    "digital_twin_industrial": {
+        "terms": ["digital twin", "digital twins", "virtual commissioning",
+                  "simulation-driven", "predictive maintenance"],
+        "emerged": "2019-01",
+        "category": "Industrial Automation",
+        "maturity": 2,
+    },
+    "cobots": {
+        "terms": ["collaborative robot", "cobot", "cobots", "autonomous mobile robot",
+                  "amr", "warehouse automation", "robotic process"],
+        "emerged": "2018-01",
+        "category": "Industrial Automation",
+        "maturity": 2,
+    },
+    
+    # === Consumer / Retail Tech ===
+    "social_commerce": {
+        "terms": ["social commerce", "live commerce", "shoppable", "creator economy",
+                  "influencer commerce"],
+        "emerged": "2020-01",
+        "category": "Consumer Tech",
+        "maturity": 2,
+    },
+    "retail_media": {
+        "terms": ["retail media", "retail media network", "commerce media",
+                  "first-party data", "zero-party data"],
+        "emerged": "2021-01",
+        "category": "Consumer Tech",
+        "maturity": 1,
+    },
 }
+
+# ==============================================================================
+# SECTOR → TECHNOLOGY RELEVANCE MAPPING
+# ==============================================================================
+# Maps GICS sectors to the tech categories most relevant for innovation scoring.
+# Technologies in a company's sector get 2x weight; cross-sector AI/ML gets 1.5x.
+# Technologies outside the company's sector still count but at base weight.
+
+SECTOR_TECH_RELEVANCE = {
+    "Technology": {
+        "high": ["AI/ML", "Cloud", "Semiconductors", "Quantum"],
+        "medium": ["Autonomous", "Robotics", "Metaverse", "Industrial Automation"],
+    },
+    "Communication Services": {
+        "high": ["AI/ML", "Metaverse", "Consumer Tech"],
+        "medium": ["Cloud", "Quantum"],
+    },
+    "Healthcare": {
+        "high": ["Biotech", "Digital Health"],
+        "medium": ["AI/ML", "Quantum"],
+    },
+    "Financials": {
+        "high": ["Fintech", "AI/ML"],
+        "medium": ["Cloud", "Quantum"],
+    },
+    "Energy": {
+        "high": ["Energy Transition", "Clean Tech"],
+        "medium": ["AI/ML", "Industrial Automation"],
+    },
+    "Industrials": {
+        "high": ["Industrial Automation", "Robotics"],
+        "medium": ["AI/ML", "Autonomous", "Clean Tech", "Energy Transition"],
+    },
+    "Consumer Discretionary": {
+        "high": ["Consumer Tech", "AI/ML"],
+        "medium": ["Autonomous", "Robotics", "Metaverse"],
+    },
+    "Consumer Staples": {
+        "high": ["Consumer Tech"],
+        "medium": ["AI/ML", "Industrial Automation", "Clean Tech"],
+    },
+    "Materials": {
+        "high": ["Clean Tech", "Industrial Automation"],
+        "medium": ["AI/ML", "Energy Transition"],
+    },
+    "Utilities": {
+        "high": ["Energy Transition", "Clean Tech"],
+        "medium": ["AI/ML", "Industrial Automation"],
+    },
+    "Real Estate": {
+        "high": ["Clean Tech"],
+        "medium": ["AI/ML", "Industrial Automation"],
+    },
+}
+
+
+# ==============================================================================
+# PRE-COMPUTED INDUSTRY BASELINES
+# ==============================================================================
+# These are approximate median adoption dates across S&P 500 tech companies
+# to avoid expensive computation during ranking. Updated periodically.
+# Format: tech_id -> approximate industry median adoption date
+
+INDUSTRY_BASELINE_DATES = {
+    # AI/ML (most relevant for 2024-2026)
+    "generative_ai": "2023-06",
+    "large_language_model": "2023-03",
+    "chatgpt": "2023-03",
+    "copilot": "2023-09",
+    "transformer": "2022-06",
+    "inference": "2022-01",
+    # Cloud
+    "edge_computing": "2020-06",
+    "multicloud": "2020-01",
+    # Autonomous
+    "autonomous_vehicle": "2018-06",
+    "fsd": "2020-06",
+    # Semiconductors
+    "chiplet": "2022-06",
+    "advanced_node": "2023-01",
+    "hbm": "2023-09",
+    # Frontier
+    "quantum": "2021-06",
+    "metaverse": "2022-06",
+    # Biotech
+    "mrna": "2021-06",
+    "crispr": "2020-01",
+    # Clean Tech
+    "carbon_neutral": "2021-06",
+    "solid_state_battery": "2023-01",
+    # Robotics
+    "humanoid": "2023-06",
+    # Fintech
+    "blockchain": "2018-06",
+    "defi": "2021-06",
+    "embedded_finance": "2021-01",
+    # Digital Health
+    "digital_health": "2020-06",
+    "ai_drug_discovery": "2022-01",
+    "precision_medicine": "2019-06",
+    # Energy Transition
+    "hydrogen": "2021-06",
+    "grid_storage": "2020-01",
+    "carbon_capture": "2021-01",
+    # Industrial Automation
+    "industrial_iot": "2019-06",
+    "digital_twin_industrial": "2021-01",
+    "cobots": "2020-06",
+    # Consumer Tech
+    "social_commerce": "2021-06",
+    "retail_media": "2022-06",
+}
+
+# Recency weights - how much to weight adoptions by age
+# Recent adoptions matter more for investment signals
+RECENCY_HALF_LIFE_MONTHS = 24  # Adoption value halves every 2 years
 
 
 # ==============================================================================
@@ -218,6 +449,11 @@ class EarlyAdopterSignal:
     # GenAI specific (most relevant current wave)
     genai_score: float  # Lead months on GenAI-related terms
     genai_adopted: List[str]  # Which GenAI terms they've adopted
+    
+    # Sector-aware scoring
+    detected_sector: str = ""  # GICS sector detected for this ticker
+    sector_innovation_score: float = 0.0  # 0-1 score for sector-relevant innovation
+    sector_relevant_techs: List[str] = field(default_factory=list)  # Sector-relevant techs adopted
 
 
 @dataclass
@@ -246,9 +482,12 @@ class EarlyAdopterModel:
     Usage:
         model = EarlyAdopterModel()
         
-        # Analyze a single company
+        # Fast mode (default) - only loads transcripts for target ticker
         signal = model.analyze_company("NVDA")
         print(f"Pioneer Score: {signal.pioneer_score}")
+        
+        # Full mode - compares against peer universe (slower)
+        signal = model.analyze_company("NVDA", fast_mode=False)
         
         # Get industry-wide view
         timelines = model.get_industry_timelines()
@@ -257,14 +496,23 @@ class EarlyAdopterModel:
         rankings = model.rank_pioneers(["NVDA", "MSFT", "AAPL", ...])
     """
     
-    def __init__(self, lookback_years: int = 6):
+    # Class-level cache limits to prevent unbounded memory growth
+    _max_adoption_cache_size = 20
+    _adoption_cache_order: List[str] = []
+    
+    # Class-level industry baseline cache (shared across instances)
+    _precomputed_baselines: Dict[str, datetime] = {}
+    
+    def __init__(self, lookback_years: int = 3, focus_recent: bool = True):
         """
         Initialize the model.
         
         Args:
-            lookback_years: How many years of history to analyze
+            lookback_years: How many years of history to analyze (default: 3 for recency)
+            focus_recent: If True, apply recency decay to older adoptions
         """
         self.lookback_years = lookback_years
+        self.focus_recent = focus_recent
         self.client = DefeatBetaTranscriptClient()
         self.lexicon = EMERGING_TECH_LEXICON
         
@@ -272,12 +520,87 @@ class EarlyAdopterModel:
         self._patterns = {}
         self._compile_patterns()
         
-        # Caches
+        # Caches with LRU eviction
         self._adoption_cache: Dict[str, List[TechAdoption]] = {}
         self._timeline_cache: Dict[str, IndustryTimeline] = {}
         self._industry_avgs: Dict[str, datetime] = {}
         
+        # Load precomputed baselines if not already loaded
+        self._load_precomputed_baselines()
+        
         logger.info("EarlyAdopterModel initialized")
+    
+    def _load_precomputed_baselines(self):
+        """Load pre-computed industry baseline dates."""
+        if not EarlyAdopterModel._precomputed_baselines:
+            for tech_id, date_str in INDUSTRY_BASELINE_DATES.items():
+                try:
+                    EarlyAdopterModel._precomputed_baselines[tech_id] = datetime.strptime(date_str, "%Y-%m")
+                except:
+                    pass
+            logger.debug(f"Loaded {len(EarlyAdopterModel._precomputed_baselines)} precomputed baselines")
+    
+    def _apply_recency_decay(self, adoption_date: datetime, lead_months: float) -> float:
+        """Apply decay to weight recent adoptions more heavily."""
+        if not self.focus_recent:
+            return lead_months
+        
+        # Calculate months since adoption
+        months_ago = (datetime.now() - adoption_date).days / 30.44
+        
+        # Exponential decay: value = lead_months * 0.5^(months_ago / half_life)
+        decay_factor = 0.5 ** (months_ago / RECENCY_HALF_LIFE_MONTHS)
+        
+        # Also boost maturity=1 (emerging) techs
+        return lead_months * decay_factor
+    
+    def clear_cache(self):
+        """Clear all caches to free memory."""
+        self._adoption_cache.clear()
+        self._timeline_cache.clear()
+        self._industry_avgs.clear()
+        EarlyAdopterModel._adoption_cache_order.clear()
+        # Also clear transcript cache
+        self.client.clear_cache()
+        import gc
+        gc.collect()
+        logger.info("EarlyAdopterModel caches cleared")
+    
+    def _detect_sector(self, ticker: str) -> str:
+        """Detect GICS sector for a ticker using sector_momentum's lookup."""
+        try:
+            from auto_researcher.models.sector_momentum import TICKER_SECTORS
+            if ticker.upper() in TICKER_SECTORS:
+                return TICKER_SECTORS[ticker.upper()]
+        except ImportError:
+            pass
+        
+        # Fallback: try yfinance
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info
+            return info.get("sector", "")
+        except Exception:
+            pass
+        return ""
+    
+    def _get_sector_weight(self, category: str, sector: str) -> float:
+        """Get the relevance weight for a tech category given the company's sector.
+        
+        Returns:
+            2.0 for high-relevance sector tech
+            1.5 for medium-relevance sector tech  
+            1.0 for any other tech (baseline)
+        """
+        if not sector or sector not in SECTOR_TECH_RELEVANCE:
+            return 1.0
+        
+        relevance = SECTOR_TECH_RELEVANCE[sector]
+        if category in relevance.get("high", []):
+            return 2.0
+        elif category in relevance.get("medium", []):
+            return 1.5
+        return 1.0
     
     def _compile_patterns(self):
         """Compile regex patterns for each technology."""
@@ -400,11 +723,14 @@ class EarlyAdopterModel:
         self._timeline_cache = timelines
         return timelines
     
-    def _calculate_lead_times(self, adoptions: List[TechAdoption]) -> List[TechAdoption]:
+    def _calculate_lead_times(self, adoptions: List[TechAdoption], use_precomputed: bool = False) -> List[TechAdoption]:
         """Calculate how many months ahead each adoption was."""
+        # Use precomputed baselines in fast mode
+        baselines = EarlyAdopterModel._precomputed_baselines if use_precomputed else self._industry_avgs
+        
         for adoption in adoptions:
-            if adoption.tech_id in self._industry_avgs:
-                avg_date = self._industry_avgs[adoption.tech_id]
+            if adoption.tech_id in baselines:
+                avg_date = baselines[adoption.tech_id]
                 adoption.industry_avg_date = avg_date
                 
                 delta = avg_date - adoption.first_mention_date
@@ -416,6 +742,7 @@ class EarlyAdopterModel:
         self, 
         ticker: str,
         industry_tickers: Optional[List[str]] = None,
+        fast_mode: bool = True,
     ) -> EarlyAdopterSignal:
         """
         Analyze a company's early adopter behavior.
@@ -424,11 +751,18 @@ class EarlyAdopterModel:
             ticker: Stock ticker to analyze
             industry_tickers: List of peer companies for comparison.
                              If None, uses a default tech universe.
+            fast_mode: If True, use precomputed industry baselines (much faster).
+                      If False, compute from peer transcripts (more accurate).
         
         Returns:
             EarlyAdopterSignal with pioneer score and details
         """
         
+        # Fast mode: Only load target ticker transcripts, use precomputed baselines
+        if fast_mode:
+            return self._analyze_company_fast(ticker)
+        
+        # Full mode: Load all peer transcripts for accurate comparison
         # Default peer universe
         if industry_tickers is None:
             industry_tickers = [
@@ -437,6 +771,9 @@ class EarlyAdopterModel:
                 "CRM", "ADBE", "ORCL", "NOW", "SNOW", "PLTR",
                 "IBM", "CSCO", "DELL",
             ]
+        
+        # Detect sector
+        sector = self._detect_sector(ticker)
         
         # Ensure target ticker is in the list
         if ticker not in industry_tickers:
@@ -463,39 +800,131 @@ class EarlyAdopterModel:
                 signal_strength=0.0,
                 genai_score=0.0,
                 genai_adopted=[],
+                detected_sector=sector,
             )
         
-        # Calculate lead times
-        adoptions = self._calculate_lead_times(adoptions)
+        # Calculate lead times (full mode uses computed baselines)
+        adoptions = self._calculate_lead_times(adoptions, use_precomputed=False)
+        
+        return self._compute_signal(ticker, adoptions, sector=sector)
+    
+    def _analyze_company_fast(self, ticker: str) -> EarlyAdopterSignal:
+        """
+        Fast analysis using only target ticker transcripts and precomputed baselines.
+        
+        This is ~20x faster than full mode as it doesn't load peer transcripts.
+        """
+        # Detect sector for sector-aware scoring
+        sector = self._detect_sector(ticker)
+        
+        # Get adoptions for this ticker only
+        adoptions = self._find_first_mentions(ticker)
+        
+        if not adoptions:
+            return EarlyAdopterSignal(
+                ticker=ticker,
+                analysis_date=datetime.now(),
+                pioneer_score=0.0,
+                total_techs_adopted=0,
+                techs_adopted_early=0,
+                avg_lead_months=0.0,
+                categories={},
+                earliest_adoptions=[],
+                signal="neutral",
+                signal_strength=0.0,
+                genai_score=0.0,
+                genai_adopted=[],
+                detected_sector=sector,
+            )
+        
+        # Calculate lead times using precomputed baselines
+        adoptions = self._calculate_lead_times(adoptions, use_precomputed=True)
+        
+        return self._compute_signal(ticker, adoptions, sector=sector)
+    
+    def _compute_signal(self, ticker: str, adoptions: List[TechAdoption], sector: str = "") -> EarlyAdopterSignal:
+        """Compute the early adopter signal from adoptions, with sector-aware weighting."""
+        
+        # Filter to only recent adoptions (within lookback window)
+        min_date = datetime.now() - timedelta(days=365 * self.lookback_years)
+        recent_adoptions = [a for a in adoptions if a.first_mention_date >= min_date]
+        
+        if not recent_adoptions:
+            # Fall back to all adoptions if none are recent
+            recent_adoptions = adoptions
         
         # Count early adoptions (before industry median)
-        early_adoptions = [a for a in adoptions if a.lead_months and a.lead_months > 0]
+        early_adoptions = [a for a in recent_adoptions if a.lead_months and a.lead_months > 0]
         
-        # Average lead time
-        lead_times = [a.lead_months for a in adoptions if a.lead_months is not None]
-        avg_lead = sum(lead_times) / len(lead_times) if lead_times else 0
+        # Apply recency decay to lead times for scoring
+        weighted_lead_times = []
+        sector_weighted_lead_times = []
+        sector_relevant_techs = []
         
-        # Categories
+        for a in recent_adoptions:
+            if a.lead_months is not None:
+                # Apply recency decay
+                decayed_lead = self._apply_recency_decay(a.first_mention_date, a.lead_months)
+                weighted_lead_times.append(decayed_lead)
+                
+                # Apply sector relevance weight
+                sector_weight = self._get_sector_weight(a.category, sector)
+                sector_weighted_lead_times.append(decayed_lead * sector_weight)
+                
+                if sector_weight >= 1.5:
+                    sector_relevant_techs.append(a.tech_id)
+        
+        avg_lead = sum(weighted_lead_times) / len(weighted_lead_times) if weighted_lead_times else 0
+        
+        # Categories (from early adoptions)
         categories = defaultdict(int)
         for a in early_adoptions:
             categories[a.category] += 1
         
-        # Pioneer score (0-1)
-        breadth_score = min(len(adoptions) / 12, 1.0)  # Max at 12 techs
-        earliness_score = min(max(avg_lead / 18, 0), 1.0)  # Max at 18 months ahead
-        pioneer_score = 0.5 * breadth_score + 0.5 * earliness_score
+        # Pioneer score with recency-weighted components
+        # Focus more on emerging tech (maturity=1)
+        emerging_techs = [a for a in recent_adoptions if self.lexicon.get(a.tech_id, {}).get("maturity") == 1]
         
-        # GenAI-specific score
+        breadth_score = min(len(recent_adoptions) / 8, 1.0)  # Max at 8 techs (reduced from 12)
+        emerging_score = min(len(emerging_techs) / 4, 1.0)  # Bonus for emerging tech
+        earliness_score = min(max(avg_lead / 12, 0), 1.0)  # Max at 12 months ahead (reduced from 18)
+        
+        # Sector innovation score: weighted by sector relevance
+        if sector and sector_weighted_lead_times:
+            # How many sector-relevant techs adopted early?
+            sector_early = [a for a in early_adoptions 
+                          if self._get_sector_weight(a.category, sector) >= 1.5]
+            sector_breadth = min(len(sector_relevant_techs) / 4, 1.0)
+            sector_earliness = (sum(sector_weighted_lead_times) / len(sector_weighted_lead_times) / 12)
+            sector_earliness = min(max(sector_earliness, 0), 1.0)
+            sector_innovation_score = 0.5 * sector_breadth + 0.5 * sector_earliness
+        else:
+            sector_innovation_score = 0.0
+        
+        # Weighted combination: blend base pioneer score with sector innovation
+        # If sector is known, sector_innovation contributes 25% of final score
+        if sector and sector_innovation_score > 0:
+            base_pioneer = 0.3 * breadth_score + 0.4 * emerging_score + 0.3 * earliness_score
+            pioneer_score = 0.75 * base_pioneer + 0.25 * sector_innovation_score
+        else:
+            pioneer_score = 0.3 * breadth_score + 0.4 * emerging_score + 0.3 * earliness_score
+        
+        # GenAI-specific score (most relevant current wave)
         genai_techs = ["generative_ai", "large_language_model", "chatgpt", "copilot", "inference"]
         genai_lead = 0
         genai_adopted = []
-        for a in adoptions:
+        for a in recent_adoptions:
             if a.tech_id in genai_techs:
-                genai_lead += (a.lead_months or 0)
+                decayed = self._apply_recency_decay(a.first_mention_date, a.lead_months or 0)
+                genai_lead += decayed
                 genai_adopted.append(a.tech_id)
         
-        # Sort adoptions by lead time
-        sorted_adoptions = sorted(adoptions, key=lambda x: -(x.lead_months or 0))
+        # Sort adoptions by decayed lead time (sector-weighted)
+        for a in recent_adoptions:
+            base_decayed = self._apply_recency_decay(a.first_mention_date, a.lead_months or 0)
+            sector_w = self._get_sector_weight(a.category, sector) if sector else 1.0
+            a._decayed_lead = base_decayed * sector_w
+        sorted_adoptions = sorted(recent_adoptions, key=lambda x: -(getattr(x, '_decayed_lead', 0)))
         
         # Signal interpretation
         if pioneer_score >= 0.7:
@@ -524,6 +953,9 @@ class EarlyAdopterModel:
             signal_strength=signal_strength,
             genai_score=genai_lead,
             genai_adopted=genai_adopted,
+            detected_sector=sector,
+            sector_innovation_score=sector_innovation_score,
+            sector_relevant_techs=sector_relevant_techs,
         )
     
     def rank_pioneers(

@@ -453,8 +453,15 @@ class RankingSystem:
         # Stage 1: ML Screening
         ml_candidates = self._run_ml_screening(tickers, ml_top_n)
         
+        # Clear memory after ML screening
+        import gc
+        gc.collect()
+        
         # Stage 2: Agent Analysis
         analyzed = self._run_agent_analysis(ml_candidates)
+        
+        # Clear memory after agent analysis
+        gc.collect()
         
         # Stage 3: Compute Composite Scores
         ranked = self._compute_composite_scores(analyzed)

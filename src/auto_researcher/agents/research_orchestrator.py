@@ -933,23 +933,27 @@ class ResearchOrchestrator:
         self,
         tickers: list[str],
         ml_percentiles: Optional[dict[str, float]] = None,
+        clear_memory_between: bool = True,
         **kwargs,
     ) -> dict[str, UnifiedReport]:
         """
-        Analyze multiple tickers.
+        Analyze multiple tickers with memory management.
         
         Args:
             tickers: List of ticker symbols.
             ml_percentiles: Optional dict of ticker -> ML percentile.
+            clear_memory_between: If True, clear caches between tickers to manage memory.
             **kwargs: Passed to analyze().
             
         Returns:
             Dict mapping ticker to UnifiedReport.
         """
+        import gc
+        
         results = {}
         ml_percentiles = ml_percentiles or {}
         
-        for ticker in tickers:
+        for i, ticker in enumerate(tickers):
             try:
                 report = self.analyze(
                     ticker,
@@ -957,10 +961,32 @@ class ResearchOrchestrator:
                     **kwargs,
                 )
                 results[ticker] = report
+                
+                # Memory management: clear caches periodically to prevent OOM
+                if clear_memory_between and (i + 1) % 3 == 0:
+                    self._clear_agent_caches()
+                    gc.collect()
+                    logger.info(f"Memory cleanup after {i + 1} tickers")
+                    
             except Exception as e:
                 logger.error(f"Failed to analyze {ticker}: {e}")
         
+        # Final cleanup
+        if clear_memory_between:
+            self._clear_agent_caches()
+            gc.collect()
+        
         return results
+    
+    def _clear_agent_caches(self):
+        """Clear caches from memory-heavy agents."""
+        try:
+            if self.thematic_agent and hasattr(self.thematic_agent, '_early_adopter_model'):
+                ea_model = self.thematic_agent._early_adopter_model
+                if ea_model and hasattr(ea_model, 'clear_cache'):
+                    ea_model.clear_cache()
+        except Exception as e:
+            logger.debug(f"Cache clear error: {e}")
     
     def clear_cache(self, namespace: Optional[str] = None) -> int:
         """Clear cached results."""

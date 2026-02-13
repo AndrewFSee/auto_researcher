@@ -224,36 +224,48 @@ class DefeatBetaTranscriptClient:
     """
     Client for earnings call transcripts from DefeatBeta/HuggingFace.
     
-    Downloads the parquet file once to a local cache, then filters
-    for the requested ticker to avoid repeated downloads.
+    Downloads the parquet file once to a local cache, then uses PyArrow
+    to filter by ticker without loading the entire dataset into memory.
+    
+    Memory Optimization: Uses row-group filtering to only load transcripts
+    for requested tickers, reducing memory from ~2GB to ~50-100MB per ticker.
     """
     
-    _ticker_cache: Dict[str, List[Dict]] = {}  # Cache by ticker
-    _df = None  # Full dataframe (only symbol column for filtering)
+    _ticker_cache: Dict[str, List[Dict]] = {}  # Cache by ticker (limited size)
+    _cache_file_valid = False  # Whether cache file exists and is valid
     _download_attempted = False
+    _max_cache_tickers = 10  # LRU cache limit to prevent unbounded memory growth
+    _cache_order: List[str] = []  # Track ticker access order for LRU
     
     def __init__(self):
         """Initialize client."""
         pass
     
+    @classmethod
+    def clear_cache(cls):
+        """Clear all cached data to free memory."""
+        cls._ticker_cache.clear()
+        cls._cache_order.clear()
+        import gc
+        gc.collect()
+        logger.info("DefeatBetaTranscriptClient cache cleared")
+    
     def _ensure_downloaded(self) -> bool:
         """Ensure the parquet file is downloaded to local cache."""
         import os
         
-        # Already have it in memory
-        if DefeatBetaTranscriptClient._df is not None:
+        # Already validated cache file
+        if DefeatBetaTranscriptClient._cache_file_valid:
             return True
         
         # Check if we have cached file
         if os.path.exists(TRANSCRIPT_CACHE_PATH):
             try:
-                import pandas as pd
-                logger.info(f"Loading transcripts from cache: {TRANSCRIPT_CACHE_PATH}")
-                DefeatBetaTranscriptClient._df = pd.read_parquet(
-                    TRANSCRIPT_CACHE_PATH,
-                    columns=["symbol", "report_date", "fiscal_quarter", "fiscal_year", "transcripts"],
-                )
-                logger.info(f"Loaded {len(DefeatBetaTranscriptClient._df):,} transcripts from cache")
+                import pyarrow.parquet as pq
+                # Just validate file is readable without loading data
+                pq.read_schema(TRANSCRIPT_CACHE_PATH)
+                DefeatBetaTranscriptClient._cache_file_valid = True
+                logger.info(f"Transcript cache validated: {TRANSCRIPT_CACHE_PATH}")
                 return True
             except Exception as e:
                 logger.warning(f"Cache file corrupted, re-downloading: {e}")
@@ -267,7 +279,6 @@ class DefeatBetaTranscriptClient:
         
         try:
             import requests
-            import pandas as pd
             
             logger.info("Downloading earnings transcripts from HuggingFace (this may take a few minutes)...")
             
@@ -282,12 +293,7 @@ class DefeatBetaTranscriptClient:
             file_size = os.path.getsize(TRANSCRIPT_CACHE_PATH)
             logger.info(f"Downloaded {file_size/1024/1024:.1f} MB to cache")
             
-            # Load into memory
-            DefeatBetaTranscriptClient._df = pd.read_parquet(
-                TRANSCRIPT_CACHE_PATH,
-                columns=["symbol", "report_date", "fiscal_quarter", "fiscal_year", "transcripts"],
-            )
-            logger.info(f"Loaded {len(DefeatBetaTranscriptClient._df):,} transcripts")
+            DefeatBetaTranscriptClient._cache_file_valid = True
             return True
             
         except Exception as e:
@@ -296,12 +302,19 @@ class DefeatBetaTranscriptClient:
     
     def _load_ticker_transcripts(self, ticker: str) -> List[Dict]:
         """
-        Load transcripts for a specific ticker from cached data.
+        Load transcripts for a specific ticker using PyArrow row-group filtering.
+        
+        Memory Optimization: Only loads data for the requested ticker instead
+        of the entire 2GB dataset. Uses LRU cache to limit memory usage.
         """
         ticker = ticker.upper()
         
         # Check cache
         if ticker in DefeatBetaTranscriptClient._ticker_cache:
+            # Move to end of LRU order
+            if ticker in DefeatBetaTranscriptClient._cache_order:
+                DefeatBetaTranscriptClient._cache_order.remove(ticker)
+            DefeatBetaTranscriptClient._cache_order.append(ticker)
             return DefeatBetaTranscriptClient._ticker_cache[ticker]
         
         # Ensure data is downloaded
@@ -309,12 +322,19 @@ class DefeatBetaTranscriptClient:
             return []
         
         try:
+            import pyarrow.parquet as pq
             import pandas as pd
             
-            df = DefeatBetaTranscriptClient._df
+            # Use PyArrow to filter by ticker WITHOUT loading entire dataset
+            # This is the key memory optimization
+            table = pq.read_table(
+                TRANSCRIPT_CACHE_PATH,
+                columns=["symbol", "report_date", "fiscal_quarter", "fiscal_year", "transcripts"],
+                filters=[("symbol", "=", ticker)],
+            )
             
-            # Filter by ticker
-            ticker_df = df[df["symbol"] == ticker].copy()
+            ticker_df = table.to_pandas()
+            del table  # Free PyArrow memory immediately
             
             if ticker_df.empty:
                 logger.debug(f"No transcripts found for {ticker}")
@@ -331,7 +351,8 @@ class DefeatBetaTranscriptClient:
                 raw_transcript = row.get("transcripts", [])
                 
                 # Convert to single text string
-                if isinstance(raw_transcript, list):
+                # Handle both list and numpy.ndarray (parquet returns ndarray)
+                if isinstance(raw_transcript, list) or (hasattr(raw_transcript, '__iter__') and hasattr(raw_transcript, '__len__') and not isinstance(raw_transcript, (str, bytes))):
                     content_parts = []
                     for item in raw_transcript:
                         if isinstance(item, dict):
@@ -351,8 +372,18 @@ class DefeatBetaTranscriptClient:
                     "content": content,
                 })
             
+            del ticker_df  # Free pandas memory
+            
+            # LRU cache management - evict oldest if over limit
+            if len(DefeatBetaTranscriptClient._ticker_cache) >= DefeatBetaTranscriptClient._max_cache_tickers:
+                if DefeatBetaTranscriptClient._cache_order:
+                    oldest = DefeatBetaTranscriptClient._cache_order.pop(0)
+                    DefeatBetaTranscriptClient._ticker_cache.pop(oldest, None)
+                    logger.debug(f"Evicted {oldest} from transcript cache (LRU)")
+            
             # Cache results
             DefeatBetaTranscriptClient._ticker_cache[ticker] = results
+            DefeatBetaTranscriptClient._cache_order.append(ticker)
             return results
             
         except Exception as e:

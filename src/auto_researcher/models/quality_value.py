@@ -160,6 +160,9 @@ class QualityValueSignal:
     """Signal output from the quality-value model."""
     ticker: str
     
+    # Company name (from yfinance)
+    company_name: str = ""
+    
     # Quality components (0-100)
     quality_score: float = 0.0
     quality_grade: str = "N/A"  # A, B, C, D, F
@@ -265,6 +268,7 @@ class QualityValueModel:
             
             return {
                 'ticker': ticker,
+                'company_name': safe_get('shortName', safe_get('longName', ticker)),
                 'sector': safe_get('sector'),
                 'industry': safe_get('industry'),
                 # Quality metrics
@@ -559,6 +563,7 @@ class QualityValueModel:
                 return signal
             
             # Store raw metrics
+            signal.company_name = metrics.get('company_name', ticker)
             signal.sector = metrics.get('sector')
             signal.roe = metrics.get('roe')
             signal.roa = metrics.get('roa')

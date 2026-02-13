@@ -59,6 +59,13 @@ from .earnings_topic_model import (
     EARNINGS_MODEL_CONFIG,
     get_earnings_signal,
 )
+from .sector_rotation_overlay import (
+    SectorRotationOverlay,
+    SectorBreadth,
+    SectorTilt,
+    OverlaySnapshot,
+    OVERLAY_CONFIG,
+)
 
 __all__ = [
     "GBDTModel",
@@ -106,4 +113,10 @@ __all__ = [
     "EarningsArticleResult",
     "EARNINGS_MODEL_CONFIG",
     "get_earnings_signal",
+    # Sector Rotation Overlay
+    "SectorRotationOverlay",
+    "SectorBreadth",
+    "SectorTilt",
+    "OverlaySnapshot",
+    "OVERLAY_CONFIG",
 ]

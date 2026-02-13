@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 REGIME_BOUNDARIES = [
     ("2013-2016", None, pd.Timestamp("2017-01-01")),          # Before 2017
     ("2017-2019", pd.Timestamp("2017-01-01"), pd.Timestamp("2020-01-01")),
-    ("2020-2023", pd.Timestamp("2020-01-01"), None),          # 2020 onwards
+    ("2020-2023", pd.Timestamp("2020-01-01"), pd.Timestamp("2024-01-01")),
+    ("2024-2026", pd.Timestamp("2024-01-01"), None),          # 2024 onwards
 ]
 
 # All regime labels

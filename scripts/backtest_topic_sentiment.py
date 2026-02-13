@@ -150,9 +150,10 @@ def aggregate_daily_sentiment(df: pd.DataFrame) -> pd.DataFrame:
     else:
         high_signal_agg = pd.DataFrame(columns=['ticker', 'date', 'high_signal_mean', 'high_signal_count'])
     
-    # Specific topic sentiments
+    # Specific topic sentiments - all topics, not just 4
+    all_topics = df['topic'].unique().tolist()
     topic_specific = {}
-    for topic in ['litigation', 'earnings', 'management', 'mna']:
+    for topic in all_topics:
         topic_df = df[df['topic'] == topic]
         if len(topic_df) > 0:
             topic_agg_specific = topic_df.groupby(['ticker', 'date']).agg(
@@ -188,9 +189,13 @@ def analyze_signal_strength(df: pd.DataFrame, prices: pd.DataFrame, forward_retu
     """
     results = []
     
-    # Features to test
-    features = ['finbert_mean', 'topic_mean', 'high_signal_mean', 
-                'litigation_sentiment', 'earnings_sentiment']
+    # Features to test - include all per-topic sentiment columns
+    features = ['finbert_mean', 'topic_mean', 'high_signal_mean']
+    
+    # Add all per-topic sentiment columns dynamically
+    for col in df.columns:
+        if col.endswith('_sentiment') and col not in features:
+            features.append(col)
     
     for feature in features:
         if feature not in df.columns or df[feature].std() == 0:
@@ -340,6 +345,47 @@ def run_backtest():
             print(f"  {row['horizon']}: IC={row['ic']:+.4f}{sig}, Hit={row['hit_rate']:.1%}, N={row['n_obs']}")
     else:
         print("  No litigation articles in dataset")
+    
+    # =========================================================================
+    # Extract per-topic ICs and save to data/topic_ic.json
+    # =========================================================================
+    print("\n" + "="*80)
+    print("PER-TOPIC IC VALUES (10-day horizon, saved to data/topic_ic.json)")
+    print("="*80)
+    
+    # Use 10-day horizon as primary (most signal, least noise)
+    topic_ics = {}
+    for _, row in results.iterrows():
+        feat = row['feature']
+        if feat.endswith('_sentiment') and row['horizon'] == 'fwd_10d':
+            topic_name = feat.replace('_sentiment', '')
+            topic_ics[topic_name] = {
+                'ic': round(row['ic'], 6),
+                'ic_pval': round(row['ic_pval'], 6),
+                'hit_rate': round(row['hit_rate'], 4),
+                'spread': round(row['spread'], 6),
+                'n_obs': int(row['n_obs']),
+                'significant': row['ic_pval'] < 0.05,
+            }
+            sig = "*" if row['ic_pval'] < 0.05 else ""
+            print(f"  {topic_name:15s}: IC={row['ic']:+.6f}{sig}  Hit={row['hit_rate']:.1%}  "
+                  f"Spread={row['spread']:+.4%}  N={row['n_obs']}")
+    
+    # Save simplified version (topic -> IC value) for the sentiment agent
+    ic_simple = {topic: data['ic'] for topic, data in topic_ics.items()}
+    ic_output_path = Path(__file__).parent.parent / "data" / "topic_ic.json"
+    
+    # Also save the detailed version
+    ic_detailed_path = Path(__file__).parent.parent / "data" / "topic_ic_detailed.json"
+    
+    import json
+    with open(ic_output_path, 'w') as f:
+        json.dump(ic_simple, f, indent=2)
+    print(f"\n  Saved simple ICs to {ic_output_path}")
+    
+    with open(ic_detailed_path, 'w') as f:
+        json.dump(topic_ics, f, indent=2)
+    print(f"  Saved detailed ICs to {ic_detailed_path}")
     
     return results
 

@@ -139,6 +139,32 @@ class FinBERTAnalyzer:
         
         logger.info("FinBERT model loaded successfully")
     
+    def unload(self):
+        """Unload model from memory to free resources."""
+        if hasattr(self, 'model') and self.model is not None:
+            del self.model
+            self.model = None
+        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+            del self.tokenizer
+            self.tokenizer = None
+        if hasattr(self, 'pipeline') and self.pipeline is not None:
+            del self.pipeline
+            self.pipeline = None
+        
+        # Clear CUDA cache if available
+        if HAS_TRANSFORMERS:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
+        import gc
+        gc.collect()
+        logger.info("FinBERT model unloaded from memory")
+    
+    def is_loaded(self) -> bool:
+        """Check if model is currently loaded."""
+        return hasattr(self, 'model') and self.model is not None
+    
     def analyze(self, text: str) -> FinBERTResult:
         """
         Analyze sentiment of a single text.
@@ -215,8 +241,8 @@ class FinBERTAnalyzer:
         """
         results = []
         
-        # Process in batches
-        batch_size = 16
+        # Process in batches - smaller batches use less memory
+        batch_size = 8
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
             

@@ -35,6 +35,7 @@ class EnhancedFeatureConfig:
         use_residual_mom: Include beta-adjusted residual momentum.
         use_idio_vol: Include idiosyncratic volatility features.
         use_mad_metrics: Include median absolute deviation metrics.
+        use_trend_health: Include trend health (MA ratio) feature.
         use_sector_ohe: Include one-hot encoded sector features.
         use_cross_sec_norm: Apply cross-sectional normalization to features.
         cross_sec_norm_by_sector: Normalize within sector (requires sector data).
@@ -55,11 +56,22 @@ class EnhancedFeatureConfig:
     cross_sec_norm_by_sector: bool = False
     cross_sec_norm_robust: bool = True
     
+    # Regime-aware scaling (dampen short-term reversal in downtrends)
+    use_regime_scaling: bool = True
+    regime_mom_feature: str = "tech_resid_mom_252"
+    regime_threshold: float = 0.0
+    regime_short_reversal_scale: float = 0.3
+    regime_short_reversal_features: tuple[str, ...] = ("tech_mom_5d", "tech_mom_10d")
+    
     # Window parameters
     beta_window: int = 60
     idio_vol_windows: tuple[int, ...] = (21, 63)
     residual_mom_windows: tuple[int, ...] = (63, 126, 252)
     mad_window: int = 63
+    trend_health_windows: tuple[int, int] = (63, 252)
+
+    # Trend health feature toggle
+    use_trend_health: bool = True
     
     # Short reversal windows
     short_reversal_windows: tuple[int, ...] = (5, 10)
@@ -285,6 +297,38 @@ def compute_idio_volatility_features(
     result.columns = pd.MultiIndex.from_tuples(result.columns, names=["ticker", "feature"])
     
     logger.debug(f"Computed idiosyncratic volatility features for windows {windows}")
+    return result
+
+
+# =============================================================================
+# TREND HEALTH FEATURES
+# =============================================================================
+
+def compute_trend_health_features(
+    prices: pd.DataFrame,
+    short_window: int = 63,
+    long_window: int = 252,
+) -> pd.DataFrame:
+    """
+    Compute trend health features using moving average ratios.
+    
+    Feature:
+      tech_ma_ratio_{short}_{long}: (MA_short / MA_long) - 1
+    """
+    if short_window >= long_window:
+        raise ValueError("short_window must be less than long_window")
+
+    ma_short = prices.rolling(window=short_window, min_periods=short_window // 2).mean()
+    ma_long = prices.rolling(window=long_window, min_periods=long_window // 2).mean()
+    ma_ratio = (ma_short / ma_long) - 1
+
+    features = {}
+    for ticker in ma_ratio.columns:
+        features[(ticker, f"tech_ma_ratio_{short_window}_{long_window}")] = ma_ratio[ticker]
+
+    result = pd.DataFrame(features)
+    result.columns = pd.MultiIndex.from_tuples(result.columns, names=["ticker", "feature"])
+    logger.debug(f"Computed trend health features: MA ratio {short_window}/{long_window}")
     return result
 
 
@@ -575,7 +619,24 @@ def _normalize_global(feat_data: pd.DataFrame, robust: bool) -> pd.DataFrame:
     if robust:
         # Robust: median and MAD
         center = feat_data.median(axis=1)
-        scale = feat_data.apply(lambda row: stats.median_abs_deviation(row.dropna(), nan_policy='omit'), axis=1)
+
+        def _safe_mad(row):
+            """MAD with small-sample guard (scipy needs >= 3 values)."""
+            vals = row.dropna()
+            if len(vals) < 3:
+                return np.nan
+            return stats.median_abs_deviation(vals, nan_policy='omit')
+
+        import warnings
+        with warnings.catch_warnings():
+            warnings.filterwarnings('ignore', category=UserWarning, message='.*small.*')
+            # Also catch scipy's SmallSampleWarning if it exists
+            try:
+                from scipy.stats import SmallSampleWarning
+                warnings.filterwarnings('ignore', category=SmallSampleWarning)
+            except ImportError:
+                pass
+            scale = feat_data.apply(_safe_mad, axis=1)
         # Scale MAD to be consistent with std (MAD * 1.4826 ≈ std for normal dist)
         scale = scale * 1.4826
     else:
@@ -590,6 +651,40 @@ def _normalize_global(feat_data: pd.DataFrame, robust: bool) -> pd.DataFrame:
     normalized = feat_data.sub(center, axis=0).div(scale, axis=0)
     
     return normalized
+
+
+def apply_regime_scaling(
+    features: pd.DataFrame,
+    regime_mom_feature: str,
+    threshold: float,
+    short_reversal_features: tuple[str, ...],
+    short_reversal_scale: float,
+) -> pd.DataFrame:
+    """
+    Damp short-term reversal features when long-term momentum is negative.
+    
+    For each ticker and date, if regime_mom_feature < threshold, scale the
+    short_reversal_features by short_reversal_scale.
+    """
+    if regime_mom_feature not in features.columns.get_level_values(1):
+        return features
+    
+    result = features.copy()
+    
+    # Regime signal: DataFrame with columns = tickers, index = dates
+    regime = features.xs(regime_mom_feature, level=1, axis=1)
+    
+    for feat in short_reversal_features:
+        if feat not in features.columns.get_level_values(1):
+            continue
+        short_feat = features.xs(feat, level=1, axis=1)
+        scaled = short_feat.where(regime >= threshold, short_feat * short_reversal_scale)
+        
+        # Write back to MultiIndex columns
+        for ticker in scaled.columns:
+            result[(ticker, feat)] = scaled[ticker]
+    
+    return result
 
 
 def _normalize_by_sector(
@@ -705,6 +800,17 @@ def compute_all_enhanced_features(
         mad_feats = compute_mad_features(stock_prices, window=config.mad_window)
         all_features.append(mad_feats)
         logger.info(f"Added {len(mad_feats.columns)} MAD features")
+
+    # Trend health features
+    if config.use_trend_health:
+        short_w, long_w = config.trend_health_windows
+        trend_feats = compute_trend_health_features(
+            stock_prices,
+            short_window=short_w,
+            long_window=long_w,
+        )
+        all_features.append(trend_feats)
+        logger.info(f"Added {len(trend_feats.columns)} trend health features")
     
     # Sector encoding
     if config.use_sector_ohe:
@@ -719,14 +825,20 @@ def compute_all_enhanced_features(
     if not all_features:
         raise ValueError("No enhanced features computed - check configuration")
     
-    # Combine all features
+    # Combine all features - memory efficient approach
+    import gc
     if len(all_features) == 1:
         result = all_features[0]
     else:
         result = all_features[0]
-        for other in all_features[1:]:
+        for i, other in enumerate(all_features[1:], 1):
             # Merge on index, combine columns
             result = pd.concat([result, other], axis=1)
+            # Clear the merged dataframe from list to free memory
+            all_features[i] = None
+        # Clear intermediate list
+        del all_features
+        gc.collect()
     
     # Apply cross-sectional normalization
     if config.use_cross_sec_norm:
@@ -738,6 +850,17 @@ def compute_all_enhanced_features(
             exclude_prefixes=("sector_",),  # Don't normalize sector dummies
         )
         logger.info("Applied cross-sectional normalization to features")
+    
+    # Regime-aware scaling of short-term reversal signals
+    if config.use_regime_scaling:
+        result = apply_regime_scaling(
+            result,
+            regime_mom_feature=config.regime_mom_feature,
+            threshold=config.regime_threshold,
+            short_reversal_features=config.regime_short_reversal_features,
+            short_reversal_scale=config.regime_short_reversal_scale,
+        )
+        logger.info("Applied regime-aware scaling to short-term reversal features")
     
     return result
 

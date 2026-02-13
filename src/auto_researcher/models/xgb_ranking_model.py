@@ -615,6 +615,7 @@ class XGBRegressionModel:
         X_val: Optional[pd.DataFrame] = None,
         y_val: Optional[pd.Series] = None,
         groups_val: Optional[np.ndarray] = None,  # Ignored
+        sample_weight: Optional[np.ndarray] = None,
     ) -> "XGBRegressionModel":
         """Fit the regression model.
         
@@ -625,6 +626,7 @@ class XGBRegressionModel:
             X_val: Optional validation feature matrix.
             y_val: Optional validation targets.
             groups_val: Ignored.
+            sample_weight: Optional sample weights for training.
         
         Returns:
             Self for method chaining.
@@ -648,6 +650,10 @@ class XGBRegressionModel:
             "X": X.values,
             "y": y.values,
         }
+        
+        # Add sample weights if provided (for recency weighting)
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = sample_weight
         
         # Add validation set if provided
         if X_val is not None and y_val is not None:

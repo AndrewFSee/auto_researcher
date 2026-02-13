@@ -67,7 +67,9 @@ Usage:
             print(f"  Expected Alpha: {analysis.earnings_expected_alpha:.2%}")
 """
 
+import json
 import logging
+import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -147,6 +149,11 @@ class SentimentResult:
     earnings_topic_tradeable: bool = False  # Is signal actionable?
     earnings_articles_count: int = 0  # Number of earnings-related articles
     earnings_expected_alpha: Optional[float] = None  # Expected 5d alpha
+    sentiment_score_base: Optional[float] = None  # Pre-adjustment score
+    topic_ic_score: Optional[float] = None  # IC-weighted topic score
+    topic_ic_confidence: Optional[float] = None  # 0 to 1
+    topic_ic_alpha: Optional[float] = None  # Blend weight
+    topic_ic_applied: Optional[dict] = None  # Per-topic IC application details
 
 
 @dataclass
@@ -165,6 +172,16 @@ class SentimentAgentConfig:
     use_scraped_db: bool = True  # Use our scraped Business Insider news database
     scraped_db_lookback_days: int = 30  # How far back to look in scraped DB
     use_topic_model: bool = True  # Use topic-based sentiment model
+    use_topic_ic_adjustment: bool = True  # Adjust sentiment by topic ICs
+    topic_ic_path: Optional[str] = "data/topic_ic.json"  # Optional JSON path to topic IC weights
+    topic_ic_weights: dict[str, float] = field(default_factory=dict)  # topic -> IC
+    topic_ic_min_abs: float = 0.01  # Ignore weak ICs
+    topic_ic_alpha_max: float = 0.6  # Max blend weight for IC-adjusted score
+    # RAG settings
+    use_rag: bool = True  # Enable RAG retrieval from vector store
+    rag_n_results: int = 10  # Number of articles to retrieve per ticker
+    rag_lookback_days: int = 30  # How far back to look for articles
+    rag_include_topic_ic: bool = True  # Include topic IC context in prompt
 
 
 # ==============================================================================
@@ -244,6 +261,16 @@ class SentimentAgent:
                 logger.info("Loaded TopicSentimentModel for topic-based analysis")
             except ImportError as e:
                 logger.warning(f"TopicSentimentModel not available: {e}")
+
+        if self.config.use_topic_ic_adjustment and self.config.topic_ic_path and not self.config.topic_ic_weights:
+            if os.path.exists(self.config.topic_ic_path):
+                try:
+                    with open(self.config.topic_ic_path, "r") as f:
+                        data = json.load(f)
+                    if isinstance(data, dict):
+                        self.config.topic_ic_weights = {str(k): float(v) for k, v in data.items()}
+                except Exception as e:
+                    logger.warning(f"Failed to load topic IC weights: {e}")
         
         # Initialize Earnings Topic Model (strongest signal from backtest)
         self._earnings_model = None
@@ -253,6 +280,22 @@ class SentimentAgent:
             logger.info("Loaded EarningsTopicModel for earnings-focused analysis")
         except ImportError as e:
             logger.warning(f"EarningsTopicModel not available: {e}")
+        
+        # Initialize RAG vector store
+        self._vectorstore = None
+        if self.config.use_rag:
+            try:
+                from ..data.news_vectorstore import NewsVectorStore
+                self._vectorstore = NewsVectorStore()
+                count = self._vectorstore.get_index_count()
+                if count > 0:
+                    logger.info(f"Loaded NewsVectorStore with {count:,} articles for RAG")
+                else:
+                    logger.warning("NewsVectorStore is empty - run 'python -m auto_researcher.data.news_vectorstore build' first")
+                    self._vectorstore = None
+            except Exception as e:
+                logger.warning(f"NewsVectorStore not available: {e}")
+                self._vectorstore = None
         
         mode = "finbert_only" if self.finbert_only else "hybrid" if self.hybrid_mode else "llm"
         logger.info(f"Initialized SentimentAgent with mode: {mode}, model: {self.model}")
@@ -586,11 +629,32 @@ class SentimentAgent:
             for item in news_items
         ])
         
+        # Retrieve articles from vector store for grounded analysis
+        rag_context = ""
+        if self._vectorstore:
+            try:
+                rag_context = self._vectorstore.format_context_for_prompt(
+                    ticker=ticker,
+                    n_results=self.config.rag_n_results,
+                    lookback_days=self.config.rag_lookback_days,
+                    include_topic_ic=self.config.rag_include_topic_ic,
+                )
+            except Exception as e:
+                logger.debug(f"RAG retrieval failed for {ticker}: {e}")
+        
         prompt = f"""Analyze the sentiment of recent news for {ticker} stock.
 
 RECENT NEWS HEADLINES:
 {news_text}
-
+"""
+        
+        if rag_context:
+            prompt += f"""
+HISTORICAL NEWS CONTEXT (retrieved from database):
+{rag_context}
+"""
+        
+        prompt += """
 Provide your analysis in the following exact format:
 
 SENTIMENT_SCORE: [number from -1.0 to 1.0, where -1 is very bearish, 0 is neutral, 1 is very bullish]
@@ -599,7 +663,9 @@ LABEL: [one of: very_bearish, bearish, neutral, bullish, very_bullish]
 SUMMARY: [one sentence summarizing the overall sentiment and why]
 THEMES: [comma-separated list of 2-4 key themes from the news]
 
-Be objective and base your analysis only on the headlines provided. If headlines are mixed, reflect that in a more neutral score."""
+Be objective and base your analysis on the headlines and retrieved articles provided.
+If articles relate to high-IC topics (earnings, M&A, analyst), weight those more heavily.
+If headlines are mixed, reflect that in a more neutral score."""
 
         return prompt
     
@@ -732,6 +798,82 @@ Be objective and base your analysis only on the headlines provided. If headlines
         except Exception as e:
             logger.warning(f"Topic analysis failed for {ticker}: {e}")
             return {}
+
+    @staticmethod
+    def _label_from_score(score: float) -> str:
+        if score > 0.3:
+            return "bullish"
+        if score > 0.1:
+            return "neutral"
+        if score > -0.1:
+            return "neutral"
+        if score > -0.3:
+            return "bearish"
+        return "very_bearish"
+
+    def _compute_topic_ic_score(
+        self,
+        topic_sentiment: dict,
+        topic_counts: dict,
+    ) -> tuple[float, float, dict]:
+        if not topic_sentiment or not self.config.topic_ic_weights:
+            return 0.0, 0.0, {}
+
+        total_weight = 0.0
+        weighted = 0.0
+        applied: dict[str, dict] = {}
+
+        for topic, sent in topic_sentiment.items():
+            if topic not in self.config.topic_ic_weights:
+                continue
+            ic = float(self.config.topic_ic_weights.get(topic, 0.0))
+            if abs(ic) < self.config.topic_ic_min_abs:
+                continue
+            count = float(topic_counts.get(topic, 1) or 1)
+            weight = abs(ic) * math.sqrt(count)
+            adjusted = sent * (1 if ic >= 0 else -1)
+            weighted += adjusted * weight
+            total_weight += weight
+            applied[topic] = {
+                "ic": round(ic, 4),
+                "weight": round(weight, 4),
+                "sentiment": round(float(sent), 4),
+                "adjusted": round(float(adjusted), 4),
+            }
+
+        if total_weight <= 0:
+            return 0.0, 0.0, applied
+
+        score = weighted / total_weight
+        confidence = min(1.0, total_weight / 0.3)
+        return float(score), float(confidence), applied
+
+    def _apply_topic_ic_adjustment(
+        self,
+        result: SentimentResult,
+        topic_results: dict,
+    ) -> None:
+        if not self.config.use_topic_ic_adjustment or not topic_results:
+            return
+
+        topic_sentiment = topic_results.get("topic_sentiment") or {}
+        topic_counts = topic_results.get("topic_counts") or {}
+        ic_score, ic_conf, applied = self._compute_topic_ic_score(topic_sentiment, topic_counts)
+        if ic_conf <= 0:
+            return
+
+        base_score = result.sentiment_score
+        alpha = min(self.config.topic_ic_alpha_max, 0.2 + 0.4 * ic_conf)
+        blended = (1 - alpha) * base_score + alpha * ic_score
+
+        result.sentiment_score_base = base_score
+        result.sentiment_score = max(-1.0, min(1.0, blended))
+        result.sentiment_label = self._label_from_score(result.sentiment_score)
+        result.confidence = max(result.confidence, ic_conf * 0.8)
+        result.topic_ic_score = ic_score
+        result.topic_ic_confidence = ic_conf
+        result.topic_ic_alpha = alpha
+        result.topic_ic_applied = applied
     
     def _build_hybrid_prompt(
         self,
@@ -750,6 +892,19 @@ Be objective and base your analysis only on the headlines provided. If headlines
                 news_text += f"\n   {item.snippet}"
             news_text += f"\n   Source: {item.source} | {item.published.strftime('%Y-%m-%d')}"
         
+        # Retrieve articles from vector store for grounded analysis
+        rag_context = ""
+        if self._vectorstore:
+            try:
+                rag_context = self._vectorstore.format_context_for_prompt(
+                    ticker=ticker,
+                    n_results=self.config.rag_n_results,
+                    lookback_days=self.config.rag_lookback_days,
+                    include_topic_ic=self.config.rag_include_topic_ic,
+                )
+            except Exception as e:
+                logger.debug(f"RAG retrieval failed for {ticker}: {e}")
+        
         prompt = f"""Analyze the sentiment for {ticker} stock based on these news items:
 
 {news_text}
@@ -757,12 +912,21 @@ Be objective and base your analysis only on the headlines provided. If headlines
 A FinBERT model (specialized for financial text) scored the sentiment as:
 - FinBERT Score: {finbert_score:+.2f} (scale: -1 bearish to +1 bullish)
 - FinBERT Label: {finbert_label}
-
-Review the news and the FinBERT assessment. Provide your analysis:
+"""
+        
+        if rag_context:
+            prompt += f"""
+HISTORICAL NEWS CONTEXT (retrieved from database):
+{rag_context}
+"""
+        
+        prompt += """
+Review the news, FinBERT assessment, and historical context. Provide your analysis:
 
 1. Do you AGREE or DISAGREE with FinBERT's assessment? Why?
 2. What nuances might FinBERT miss?
 3. What are the key themes?
+4. How do high-IC topics (earnings, M&A, analyst coverage) affect the outlook?
 
 Respond in this EXACT format:
 SENTIMENT_SCORE: [your score from -1.0 to +1.0]
@@ -773,7 +937,7 @@ AGREEMENT_REASON: [brief explanation of agreement/disagreement]
 KEY_THEMES: [comma-separated list of 3-5 themes]
 SUMMARY: [one sentence summary of overall sentiment]
 
-Focus on what matters for investment decisions."""
+Focus on what matters for investment decisions. Weight high-IC topics more heavily."""
 
         return prompt
     
@@ -855,6 +1019,25 @@ Focus on what matters for investment decisions."""
         # Fetch news from all sources (yfinance + DefeatBeta)
         news_items = self.fetch_all_news(ticker)
         
+        # Add freshly fetched articles to vector store for RAG retrieval
+        if self._vectorstore and news_items:
+            try:
+                live_articles = [
+                    {
+                        "title": item.title,
+                        "snippet": item.snippet or "",
+                        "source": item.source,
+                        "published": item.published,
+                        "url": item.url,
+                    }
+                    for item in news_items
+                ]
+                added = self._vectorstore.add_articles(live_articles, ticker=ticker)
+                if added > 0:
+                    logger.info(f"Indexed {added} live articles for {ticker} into vector store")
+            except Exception as e:
+                logger.debug(f"Failed to index live articles for {ticker}: {e}")
+        
         # Run topic analysis if enabled (runs in parallel with other analysis)
         topic_results = self._run_topic_analysis(ticker, news_items) if news_items else {}
         
@@ -887,7 +1070,7 @@ Focus on what matters for investment decisions."""
             else:
                 sentiment_label = "very_bearish"
             
-            return SentimentResult(
+            result = SentimentResult(
                 ticker=ticker,
                 sentiment_score=finbert_score,
                 sentiment_label=sentiment_label,
@@ -901,6 +1084,9 @@ Focus on what matters for investment decisions."""
                 method="finbert",
                 **topic_results,
             )
+            if topic_results:
+                self._apply_topic_ic_adjustment(result, topic_results)
+            return result
         
         # Get FinBERT baseline if using hybrid mode
         finbert_score = None
@@ -916,10 +1102,19 @@ Focus on what matters for investment decisions."""
         
         # Call LLM
         try:
+            system_msg = (
+                "You are a financial analyst specializing in stock sentiment analysis. "
+                "Be objective and concise. When provided with historical article context "
+                "and topic IC (Information Coefficient) data, use it to ground your analysis. "
+                "Topics with higher absolute IC are more predictive of future stock returns. "
+                "Pay special attention to earnings (IC=+0.020), M&A (IC=-0.027, contrarian), "
+                "and analyst coverage (IC=+0.012) topics."
+            )
+            
             response = litellm.completion(
                 model=self.model,
                 messages=[
-                    {"role": "system", "content": "You are a financial analyst specializing in stock sentiment analysis. Be objective and concise."},
+                    {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=self.config.temperature,
@@ -932,7 +1127,7 @@ Focus on what matters for investment decisions."""
             logger.error(f"LLM call failed for {ticker}: {e}")
             # Fall back to FinBERT if available
             if finbert_score is not None:
-                return SentimentResult(
+                result = SentimentResult(
                     ticker=ticker,
                     sentiment_score=finbert_score,
                     sentiment_label="bullish" if finbert_score > 0.2 else "bearish" if finbert_score < -0.2 else "neutral",
@@ -945,6 +1140,9 @@ Focus on what matters for investment decisions."""
                     finbert_label=finbert_label,
                     method="finbert_fallback",
                 )
+                if topic_results:
+                    self._apply_topic_ic_adjustment(result, topic_results)
+                return result
             return SentimentResult(
                 ticker=ticker,
                 sentiment_score=0.0,
@@ -983,6 +1181,8 @@ Focus on what matters for investment decisions."""
             result.earnings_topic_tradeable = topic_results.get("earnings_topic_tradeable", False)
             result.earnings_articles_count = topic_results.get("earnings_articles_count", 0)
             result.earnings_expected_alpha = topic_results.get("earnings_expected_alpha")
+
+            self._apply_topic_ic_adjustment(result, topic_results)
         
         return result
     
