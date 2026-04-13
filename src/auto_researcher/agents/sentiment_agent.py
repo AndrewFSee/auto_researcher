@@ -357,7 +357,7 @@ class SentimentAgent:
                         try:
                             # Parse ISO format: 2026-01-21T19:10:36Z
                             published = datetime.fromisoformat(pub_date_str.replace("Z", "+00:00"))
-                        except:
+                        except (ValueError, TypeError):
                             published = datetime.now()
                     else:
                         # Fallback to old format
@@ -537,7 +537,7 @@ class SentimentAgent:
                     if pub_date_str:
                         try:
                             published = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
-                        except:
+                        except (ValueError, TypeError):
                             published = datetime.now()
                     else:
                         published = datetime.now()
@@ -687,13 +687,13 @@ If headlines are mixed, reflect that in a more neutral score."""
                     try:
                         score = float(line.split(":", 1)[1].strip())
                         score = max(-1.0, min(1.0, score))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("CONFIDENCE:"):
                     try:
                         confidence = float(line.split(":", 1)[1].strip())
                         confidence = max(0.0, min(1.0, confidence))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("LABEL:"):
                     label = line.split(":", 1)[1].strip().lower()
@@ -967,7 +967,7 @@ Focus on what matters for investment decisions. Weight high-IC topics more heavi
                     try:
                         sentiment_score = float(line.split(":", 1)[1].strip())
                         sentiment_score = max(-1.0, min(1.0, sentiment_score))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("SENTIMENT_LABEL:"):
                     label = line.split(":", 1)[1].strip().lower()
@@ -977,7 +977,7 @@ Focus on what matters for investment decisions. Weight high-IC topics more heavi
                     try:
                         confidence = float(line.split(":", 1)[1].strip())
                         confidence = max(0.0, min(1.0, confidence))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("AGREES_WITH_FINBERT:"):
                     agrees_str = line.split(":", 1)[1].strip().lower()

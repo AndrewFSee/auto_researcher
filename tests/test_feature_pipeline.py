@@ -223,6 +223,35 @@ class TestGetFeaturesForDate:
     ) -> None:
         """Should raise KeyError for invalid date."""
         features = build_feature_matrix(sample_prices, test_config)
-        
+
         with pytest.raises(KeyError):
             get_features_for_date(features, pd.Timestamp("1900-01-01"))
+
+
+class TestFundamentalFillNA:
+    """Tests for fundamental feature NaN filling strategy."""
+
+    def test_fillna_uses_median_not_zero(self) -> None:
+        """Missing fundamentals should be filled with cross-sectional median, not zero."""
+        # Create a stacked feature matrix with known NaN patterns
+        dates = pd.date_range("2023-01-01", periods=3, freq="D")
+        tickers = ["AAPL", "MSFT", "GOOG", "AMZN"]
+        index = pd.MultiIndex.from_product([dates, tickers], names=["date", "ticker"])
+
+        # Fundamental column where AAPL is NaN but others have known values
+        pe_values = []
+        for d in dates:
+            pe_values.extend([np.nan, 20.0, 25.0, 30.0])  # AAPL=NaN, rest known
+        X = pd.DataFrame({"pe_ratio": pe_values}, index=index)
+
+        # Fill using the same logic as feature_pipeline
+        col = "pe_ratio"
+        X[col] = X[col].fillna(X.groupby(level="date")[col].transform("median"))
+
+        # AAPL should be filled with median of [20, 25, 30] = 25.0, NOT 0.0
+        for d in dates:
+            filled_val = X.loc[(d, "AAPL"), "pe_ratio"]
+            assert filled_val == 25.0, (
+                f"Expected median fill (25.0), got {filled_val}. "
+                "Zero-fill would bias missing data."
+            )

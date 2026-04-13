@@ -153,15 +153,19 @@ class RankingSystem:
     """
     
     # Default weights for combining scores
-    DEFAULT_ML_WEIGHT = 0.35  # ML contributes 35% to final score
-    
+    # Calibrated to empirical IC from data/agent_ic.json (2026-02-09)
+    DEFAULT_ML_WEIGHT = 0.30  # ML contributes 30% to final score (IC=0.15)
+
     DEFAULT_AGENT_WEIGHTS = {
-        "sentiment": 0.15,
-        "fundamental": 0.20,
-        "sec": 0.10,
-        "earnings": 0.10,
-        "insider": 0.15,
-        "thematic": 0.30,  # Forward-looking gets higher weight
+        "earnings": 0.25,      # Strongest validated signal (IC=0.1067, hit_rate=71%)
+        "thematic": 0.20,      # Strong but small sample (IC=0.0998, n=31)
+        "insider": 0.15,       # Academic-backed (IC=0.06)
+        "fundamental": 0.10,   # Weak empirical IC but important for diversification
+        "sec": 0.10,           # Filing tone (IC=0.04, literature-based)
+        "sentiment": 0.10,     # Low IC (0.0196) but fast-moving signal
+        "earnings_call": 0.10, # Qualitative analysis (IC=0.05, literature-based)
+        # NOTE: sector momentum DISABLED -- negative IC (-0.0255, hit_rate=45%)
+        # was actively hurting composite score. Re-enable only after recalibration.
     }
     
     def __init__(
@@ -171,32 +175,44 @@ class RankingSystem:
         agent_weights: Optional[dict[str, float]] = None,
         use_cache: bool = True,
         parallel: bool = True,
+        use_factor_rotation: bool = True,
     ):
         """
         Initialize the ranking system.
-        
+
         Args:
             model: LLM model for agents.
             ml_weight: Weight for ML score in composite (0-1).
             agent_weights: Dict of agent name -> weight.
             use_cache: Enable caching for agent results.
             parallel: Run agent analyses in parallel.
+            use_factor_rotation: Adjust agent weights based on factor regime.
         """
         self.model = model
         self.ml_weight = ml_weight or self.DEFAULT_ML_WEIGHT
         self.agent_weights = agent_weights or self.DEFAULT_AGENT_WEIGHTS.copy()
         self.use_cache = use_cache
         self.parallel = parallel
-        
+        self.use_factor_rotation = use_factor_rotation
+
         # Normalize agent weights to sum to (1 - ml_weight)
         agent_total = sum(self.agent_weights.values())
         if agent_total > 0:
             scale = (1 - self.ml_weight) / agent_total
             self.agent_weights = {k: v * scale for k, v in self.agent_weights.items()}
-        
+
         # Lazy-loaded components
         self._orchestrator = None
         self._ml_model = None
+        self._factor_rotation = None
+
+    @property
+    def factor_rotation(self):
+        """Lazy-load the factor rotation model."""
+        if self._factor_rotation is None:
+            from auto_researcher.models.factor_rotation import FactorRotationModel
+            self._factor_rotation = FactorRotationModel()
+        return self._factor_rotation
     
     @property
     def orchestrator(self):
@@ -321,16 +337,57 @@ class RankingSystem:
         
         return ml_candidates
     
+    def _fetch_analyst_signals(
+        self,
+        candidates: list[RankedStock],
+    ) -> dict[str, dict[str, float]]:
+        """
+        Fetch analyst consensus, momentum, and earnings revision signals.
+
+        Returns dict of ticker -> {analyst_consensus, analyst_momentum,
+        analyst_conviction, earnings_growth_0q, earnings_surprise_avg, ...}.
+        """
+        from auto_researcher.features.technical import (
+            compute_analyst_momentum,
+            compute_earnings_revision_signal,
+        )
+
+        tickers = [c.ticker for c in candidates]
+
+        result: dict[str, dict[str, float]] = {}
+
+        # Analyst recommendations
+        for (ticker, feature), value in compute_analyst_momentum(tickers).items():
+            if ticker not in result:
+                result[ticker] = {}
+            result[ticker][feature] = value
+
+        # Earnings revisions
+        for (ticker, feature), value in compute_earnings_revision_signal(tickers).items():
+            if ticker not in result:
+                result[ticker] = {}
+            result[ticker][feature] = value
+
+        return result
+
     def _run_agent_analysis(
         self,
         candidates: list[RankedStock],
     ) -> list[RankedStock]:
         """
         Stage 2: Run all agents on ML candidates.
-        
+
         Adds agent scores to each RankedStock.
         """
         logger.info(f"Stage 2: Agent analysis on {len(candidates)} candidates")
+
+        # Pre-fetch analyst signals (batch yfinance calls)
+        try:
+            analyst_signals = self._fetch_analyst_signals(candidates)
+            logger.info(f"  Fetched analyst signals for {len(analyst_signals)} tickers")
+        except Exception as e:
+            logger.warning(f"Failed to fetch analyst signals: {e}")
+            analyst_signals = {}
         
         for stock in candidates:
             ticker = stock.ticker
@@ -375,8 +432,46 @@ class RankingSystem:
                         )
                         agent_composite += weighted
                 
+                # Add analyst momentum signal if available
+                ticker_analyst = analyst_signals.get(ticker, {})
+                if "analyst_momentum" in ticker_analyst:
+                    # Analyst momentum: positive = upgrades, scale to [-1, 1]
+                    # Raw momentum is typically in [-0.5, 0.5] range
+                    raw_momentum = ticker_analyst["analyst_momentum"]
+                    analyst_score = max(-1.0, min(1.0, raw_momentum * 2))
+                    analyst_weight = self.agent_weights.get("analyst", 0.05)
+                    weighted = analyst_score * analyst_weight
+
+                    stock.agent_scores["analyst"] = AgentScore(
+                        agent="analyst",
+                        score=analyst_score,
+                        confidence=min(1.0, ticker_analyst.get("analyst_conviction", 0.5)),
+                        signal="buy" if analyst_score > 0.1 else ("sell" if analyst_score < -0.1 else "hold"),
+                        weighted_score=weighted,
+                    )
+                    agent_composite += weighted
+
+                # Add earnings revision signal if available
+                if "earnings_growth_0q" in ticker_analyst:
+                    # Combine growth and surprise into a single score
+                    growth = ticker_analyst.get("earnings_growth_0q", 0)
+                    surprise = ticker_analyst.get("earnings_surprise_avg", 0)
+                    # Growth is typically [-0.5, 0.5], surprise [-0.1, 0.1]
+                    revision_score = max(-1.0, min(1.0, growth + surprise * 3))
+                    revision_weight = self.agent_weights.get("earnings_revision", 0.05)
+                    weighted = revision_score * revision_weight
+
+                    stock.agent_scores["earnings_revision"] = AgentScore(
+                        agent="earnings_revision",
+                        score=revision_score,
+                        confidence=0.6,
+                        signal="buy" if revision_score > 0.1 else ("sell" if revision_score < -0.1 else "hold"),
+                        weighted_score=weighted,
+                    )
+                    agent_composite += weighted
+
                 stock.agent_composite = agent_composite
-                
+
                 # Get sector from thematic analysis
                 if report.thematic_analysis:
                     stock.sector = getattr(report.thematic_analysis, 'sector', '')
@@ -459,10 +554,32 @@ class RankingSystem:
         
         # Stage 2: Agent Analysis
         analyzed = self._run_agent_analysis(ml_candidates)
-        
+
         # Clear memory after agent analysis
         gc.collect()
-        
+
+        # Stage 2.5: Factor Rotation (optional regime-aware weight adjustment)
+        if self.use_factor_rotation:
+            try:
+                regime = self.factor_rotation.detect_regime()
+                adjusted_weights = self.factor_rotation.adjust_ic_weights(
+                    self.agent_weights, regime_state=regime
+                )
+                logger.info(
+                    f"Factor rotation: regime={regime.state.value}, "
+                    f"adjusting agent weights"
+                )
+                # Recompute agent composites with regime-adjusted weights
+                for stock in analyzed:
+                    agent_composite = 0.0
+                    for agent_name, agent_score in stock.agent_scores.items():
+                        new_weight = adjusted_weights.get(agent_name, agent_score.weighted_score / max(agent_score.score, 1e-9))
+                        agent_score.weighted_score = agent_score.score * new_weight
+                        agent_composite += agent_score.weighted_score
+                    stock.agent_composite = agent_composite
+            except Exception as e:
+                logger.warning(f"Factor rotation failed, using static weights: {e}")
+
         # Stage 3: Compute Composite Scores
         ranked = self._compute_composite_scores(analyzed)
         

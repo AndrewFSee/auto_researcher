@@ -536,7 +536,7 @@ class EarlyAdopterModel:
             for tech_id, date_str in INDUSTRY_BASELINE_DATES.items():
                 try:
                     EarlyAdopterModel._precomputed_baselines[tech_id] = datetime.strptime(date_str, "%Y-%m")
-                except:
+                except (ValueError, TypeError):
                     pass
             logger.debug(f"Loaded {len(EarlyAdopterModel._precomputed_baselines)} precomputed baselines")
     

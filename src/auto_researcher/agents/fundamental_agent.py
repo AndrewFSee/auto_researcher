@@ -275,7 +275,7 @@ def _fetch_defeatbeta_data(ticker: str) -> dict:
                 if surprise is not None:
                     try:
                         surprises.append(float(surprise))
-                    except:
+                    except (ValueError, TypeError):
                         pass
             if surprises:
                 data['avg_eps_surprise'] = sum(surprises) / len(surprises)
@@ -574,7 +574,7 @@ Be objective and specific to the data provided."""
                     try:
                         quality_score = float(line.split(":", 1)[1].strip())
                         quality_score = max(0.0, min(1.0, quality_score))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("QUALITY_LABEL:"):
                     label = line.split(":", 1)[1].strip().lower()

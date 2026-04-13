@@ -456,7 +456,7 @@ class SectorMomentumModel:
             # Cache for future use
             TICKER_SECTORS[ticker] = sector
             return sector
-        except:
+        except Exception:
             return "Unknown"
     
     def get_sector_signals(self) -> Dict[str, SectorSignal]:

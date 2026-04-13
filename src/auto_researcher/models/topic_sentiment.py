@@ -550,7 +550,7 @@ class TopicSentimentModel:
                 if isinstance(d, str):
                     try:
                         d = datetime.fromisoformat(d.replace('Z', '+00:00'))
-                    except:
+                    except (ValueError, TypeError):
                         d = datetime.now()
                 # Make timezone-naive for comparison
                 if hasattr(d, 'tzinfo') and d.tzinfo is not None:

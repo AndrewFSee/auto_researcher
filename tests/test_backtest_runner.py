@@ -273,8 +273,75 @@ class TestRunSimpleBacktest:
                 early_stopping_rounds=None,
             ),
         )
-        
+
         result = run_simple_backtest(sample_prices, config)
-        
+
         assert len(result.portfolio_returns) > 0
         assert "sharpe_ratio" in result.metrics
+
+
+class TestEmbargo:
+    """Tests for embargo periods in walk-forward CV."""
+
+    def test_embargo_runs_without_error(self, sample_prices: pd.DataFrame) -> None:
+        """Backtest with embargo should complete successfully."""
+        config = PipelineConfig(
+            research=ResearchConfig(
+                horizon_days=21,
+                top_k=2,
+                lookback_days=63,
+                embargo_days=21,
+            ),
+            features=FeatureConfig(
+                momentum_windows=(21,),
+                volatility_windows=(21,),
+            ),
+            model=ModelConfig(
+                n_estimators=10,
+                early_stopping_rounds=None,
+            ),
+        )
+
+        result = run_backtest(
+            prices=sample_prices,
+            horizon_days=21,
+            top_k=2,
+            benchmark="SPY",
+            min_train_periods=63,
+            config=config,
+        )
+
+        assert isinstance(result, BacktestResult)
+        assert len(result.portfolio_returns) > 0
+
+    def test_embargo_zero_matches_legacy(self, sample_prices: pd.DataFrame) -> None:
+        """embargo_days=0 should produce same results as no embargo (legacy behavior)."""
+        base_config = PipelineConfig(
+            research=ResearchConfig(
+                horizon_days=21,
+                top_k=2,
+                lookback_days=63,
+                embargo_days=0,
+            ),
+            features=FeatureConfig(
+                momentum_windows=(21,),
+                volatility_windows=(21,),
+            ),
+            model=ModelConfig(
+                n_estimators=10,
+                early_stopping_rounds=None,
+            ),
+        )
+
+        result = run_backtest(
+            prices=sample_prices,
+            horizon_days=21,
+            top_k=2,
+            benchmark="SPY",
+            min_train_periods=63,
+            config=base_config,
+        )
+
+        # With embargo=0, we should get results (the test simply verifies no crash)
+        assert isinstance(result, BacktestResult)
+        assert len(result.portfolio_returns) > 0

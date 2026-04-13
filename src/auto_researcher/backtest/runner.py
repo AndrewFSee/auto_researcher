@@ -225,7 +225,7 @@ def run_backtest(
         
         logger.debug(f"Rebalancing on {rebal_date}")
         
-        # Get training data up to rebal_date (inclusive)
+        # Get training data up to rebal_date (inclusive), with embargo
         # LOOKAHEAD SAFETY CHECK:
         # - train_prices ends at rebal_date (the current decision point)
         # - prepare_training_data computes forward returns using shift(-horizon)
@@ -233,14 +233,24 @@ def run_backtest(
         #   because prices.shift(-horizon) extends beyond our cutoff
         # - These NaN rows are dropped, so we only train on labels that are
         #   fully realized BEFORE the rebal_date
-        # 
-        # OVERLAPPING HORIZONS NOTE:
-        # - With monthly rebalancing (~21 days) and 63-day horizon, consecutive
-        #   training labels overlap (share ~42 days of returns)
-        # - This is standard practice but may inflate apparent Sharpe/IC
-        # - For production, consider purging/embargo or non-overlapping periods
+        #
+        # EMBARGO: Drop the last `embargo_days` of training data to eliminate
+        # overlap between training labels and the evaluation period. Without
+        # embargo, monthly rebalancing + 63-day horizon creates 42-day overlap
+        # between consecutive labels, inflating apparent Sharpe/IC.
         train_end_idx = all_dates.get_loc(rebal_date)
-        train_prices = prices.iloc[:train_end_idx + 1]
+
+        # Apply embargo: cut training data short to avoid label overlap
+        effective_embargo = (
+            config.research.embargo_days
+            if config.research.embargo_days is not None
+            else horizon_days
+        )
+        if effective_embargo > 0:
+            embargo_end_idx = max(0, train_end_idx - effective_embargo)
+            train_prices = prices.iloc[:embargo_end_idx + 1]
+        else:
+            train_prices = prices.iloc[:train_end_idx + 1]
         
         # Prepare training data
         try:
@@ -344,9 +354,15 @@ def run_backtest(
         tech_cols = [c for c in current_features.columns if c.startswith('tech_')]
         fund_cols = [c for c in current_features.columns if not c.startswith('tech_')]
         
-        # Fill NaN fundamentals with 0 (neutral value for missing data)
+        # Fill NaN fundamentals with cross-sectional median (neutral relative to peers)
+        # Zero-fill would bias missing data toward extreme quantiles for metrics
+        # like PE ratio, ROE, debt_to_equity where 0 has a specific meaning.
         if fund_cols:
-            current_features[fund_cols] = current_features[fund_cols].fillna(0.0)
+            for col in fund_cols:
+                median_val = current_features[col].median()
+                current_features[col] = current_features[col].fillna(
+                    median_val if pd.notna(median_val) else 0.0
+                )
         
         # Only drop rows where technical features are NaN
         if tech_cols:
@@ -1205,18 +1221,30 @@ def run_enhanced_backtest(
         
         logger.debug(f"Rebalancing on {rebal_date}")
         
-        # Get training data up to rebal_date (inclusive)
+        # Get training data up to rebal_date (inclusive), with embargo
         train_end_idx = all_dates.get_loc(rebal_date)
-        
+
+        # Apply embargo: cut training data short to avoid label overlap
+        # with the evaluation period (same logic as run_backtest)
+        effective_embargo = (
+            config.research.embargo_days
+            if config.research.embargo_days is not None
+            else horizon_days
+        )
+        if effective_embargo > 0:
+            embargoed_end_idx = max(0, train_end_idx - effective_embargo)
+        else:
+            embargoed_end_idx = train_end_idx
+
         # Apply rolling window if enabled
         if use_rolling_window:
             # Use only the last rolling_window_days of data
-            train_start_idx = max(0, train_end_idx - rolling_window_days + 1)
+            train_start_idx = max(0, embargoed_end_idx - rolling_window_days + 1)
         else:
             # Use all available history (expanding window)
             train_start_idx = 0
-        
-        train_prices = prices.iloc[train_start_idx:train_end_idx + 1]
+
+        train_prices = prices.iloc[train_start_idx:embargoed_end_idx + 1]
         
         # Compute enhanced features for training data
         try:
@@ -1272,6 +1300,48 @@ def run_enhanced_backtest(
             logger.warning(f"Insufficient training data for {rebal_date}: {len(X_train)} samples")
             continue
         
+        # Walk-forward hyperparameter tuning (optional, every N periods)
+        if enhanced_cfg.auto_tune and i % enhanced_cfg.auto_tune_interval == 0:
+            try:
+                from auto_researcher.models.hyperparam_tuner import (
+                    tune_xgb_hyperparams, TunerConfig,
+                )
+                tuner_cfg = TunerConfig(
+                    n_trials=enhanced_cfg.auto_tune_trials,
+                    model_type=enhanced_cfg.model_type if enhanced_cfg.model_type != "rank_ndcg" else "rank_pairwise",
+                )
+                best_params = tune_xgb_hyperparams(X_train, y_train, config=tuner_cfg)
+                # Rebuild model with tuned params
+                if use_regression_model:
+                    from auto_researcher.models.xgb_ranking_model import XGBRegressionConfig, XGBRegressionModel
+                    objective = "reg:pseudohubererror" if enhanced_cfg.robust_objective else "reg:squarederror"
+                    tuned_config = XGBRegressionConfig(
+                        objective=objective,
+                        n_estimators=best_params.get("n_estimators", 300),
+                        max_depth=best_params.get("max_depth", 4),
+                        learning_rate=best_params.get("learning_rate", 0.05),
+                        reg_lambda=best_params.get("reg_lambda", 2.0),
+                        reg_alpha=best_params.get("reg_alpha", 0.1),
+                        subsample=best_params.get("subsample", 0.8),
+                        colsample_bytree=best_params.get("colsample_bytree", 0.8),
+                    )
+                    model = XGBRegressionModel(tuned_config)
+                else:
+                    from auto_researcher.models.xgb_ranking_model import XGBRankingConfig, XGBRankingModel
+                    tuned_config = XGBRankingConfig(
+                        objective="rank:pairwise",
+                        n_estimators=best_params.get("n_estimators", 300),
+                        max_depth=best_params.get("max_depth", 5),
+                        learning_rate=best_params.get("learning_rate", 0.05),
+                        reg_lambda=best_params.get("reg_lambda", 2.0),
+                        subsample=best_params.get("subsample", 0.8),
+                        colsample_bytree=best_params.get("colsample_bytree", 0.8),
+                    )
+                    model = XGBRankingModel(tuned_config)
+                logger.info(f"Tuned hyperparams for period {i}: depth={best_params.get('max_depth')}, lr={best_params.get('learning_rate', 0.05):.4f}")
+            except Exception as e:
+                logger.warning(f"Auto-tune failed for period {i}, using previous params: {e}")
+
         # Train model (both regression and ranking models have same fit API)
         try:
             # Feature selection based on importance
@@ -1366,23 +1436,78 @@ def run_enhanced_backtest(
         else:
             # Standard rank-weighted portfolio
             weights = build_rank_weighted_portfolio(scores, port_config)
-        
+
+        # Optional risk-management overlay using PositionSizer
+        if portfolio_cfg.use_risk_sizing and weights:
+            try:
+                from auto_researcher.risk.position_sizing import (
+                    PositionSizer,
+                    PositionSizingMethod,
+                    PositionLimit,
+                )
+                method_map = {
+                    "kelly": PositionSizingMethod.KELLY,
+                    "fractional_kelly": PositionSizingMethod.FRACTIONAL_KELLY,
+                    "volatility_target": PositionSizingMethod.VOLATILITY_TARGET,
+                    "risk_parity": PositionSizingMethod.RISK_PARITY,
+                    "equal_risk": PositionSizingMethod.EQUAL_RISK,
+                }
+                sizing_method = method_map.get(
+                    portfolio_cfg.risk_sizing_method,
+                    PositionSizingMethod.VOLATILITY_TARGET,
+                )
+                sizer = PositionSizer(
+                    method=sizing_method,
+                    target_volatility=portfolio_cfg.risk_target_vol,
+                    limits=PositionLimit(
+                        max_position_pct=portfolio_cfg.max_position_weight,
+                    ),
+                )
+                lookback = min(252, len(prices.loc[:rebal_date]))
+                recent_returns = prices.loc[:rebal_date].iloc[-lookback:].pct_change().dropna()
+
+                weight_tickers = list(weights.keys())
+                weight_signals = [weights[t] for t in weight_tickers]
+                current_prices = {
+                    t: float(prices.loc[rebal_date, t])
+                    for t in weight_tickers if t in prices.columns
+                }
+
+                positions = sizer.size_portfolio(
+                    tickers=weight_tickers,
+                    signals=weight_signals,
+                    prices=current_prices,
+                    portfolio_value=1_000_000,
+                    returns=recent_returns[
+                        [c for c in weight_tickers if c in recent_returns.columns]
+                    ],
+                )
+                risk_weights = {
+                    p.ticker: p.adjusted_weight
+                    for p in positions if p.adjusted_weight > 0
+                }
+                total = sum(risk_weights.values())
+                if total > 0:
+                    weights = {t: w / total for t, w in risk_weights.items()}
+            except Exception as e:
+                logger.warning(f"Risk sizing failed, using original weights: {e}")
+
         weights_history.append((rebal_date, weights))
-        
+
         # Compute holding period returns
         if next_rebal in prices.index and rebal_date in prices.index:
             start_prices = prices.loc[rebal_date, tradeable_tickers]
             end_prices = prices.loc[next_rebal, tradeable_tickers]
             period_returns = (end_prices / start_prices) - 1
-            
+
             port_return = compute_portfolio_return(weights, period_returns)
             portfolio_returns.append((next_rebal, port_return))
-            
+
             # Compute IC
             realized = period_returns.loc[scores.index]
             ic = compute_ic(scores, realized)
             ic_history.append((next_rebal, ic))
-    
+
     # Convert to Series
     if portfolio_returns:
         dates, returns = zip(*portfolio_returns)

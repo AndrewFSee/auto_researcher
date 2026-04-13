@@ -6,7 +6,7 @@
 [![Type checked: mypy](https://img.shields.io/badge/type%20check-mypy-blue.svg)](http://mypy-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Institutional-grade quantitative research platform** combining ML-based stock ranking, multi-agent fundamental analysis, NLP-powered earnings/filing signals, RAG-augmented transcript search, regime-aware factor rotation, and sector rotation overlays — all unified in a 3-stage ranking pipeline with IC-calibrated signal weighting and an interactive Streamlit dashboard.
+**Institutional-grade quantitative research platform** combining ML-based stock ranking with Optuna hyperparameter tuning, multi-agent fundamental analysis, NLP-powered earnings/filing signals, real sentiment features (11 per ticker from 210K+ news articles), RAG-augmented transcript search, regime-aware factor rotation, mean-variance portfolio optimization (Ledoit-Wolf), risk-managed position sizing (Kelly/vol-target/risk-parity), and sector rotation overlays — all unified in a 3-stage ranking pipeline with IC-calibrated signal weighting and an interactive Streamlit dashboard.
 
 ---
 
@@ -18,6 +18,11 @@
 - [RAG Systems (ChromaDB)](#-rag-systems-chromadb)
 - [Sector Rotation Overlay](#-sector-rotation-overlay)
 - [Factor Rotation Model](#-factor-rotation-model)
+- [Enhanced ML Features](#-enhanced-ml-features)
+- [Mean-Variance Portfolio Optimization](#-mean-variance-portfolio-optimization)
+- [Walk-Forward Hyperparameter Tuning](#-walk-forward-hyperparameter-tuning)
+- [Risk-Aware Position Sizing Integration](#%EF%B8%8F-risk-aware-position-sizing-integration)
+- [Audit Fixes](#-audit-fixes)
 - [IC Calibration System](#-ic-calibration-system)
 - [Percentile-Based Signal Assignment](#-percentile-based-signal-assignment)
 - [LLM Review Agent](#-llm-review-agent)
@@ -133,16 +138,34 @@ The pipeline produces:
 | Model | Signal | IC | t-stat | Quintile Spread | Hold Period |
 |-------|--------|-----|--------|-----------------|-------------|
 | **Early Adopter** | Tech pioneer detection | **+0.36** | 2.1 | **+25%** | 12 months |
-| **Enhanced PEAD** | Big earnings surprises | **+0.152** | 2.8 | **+3.55%** | 60 days |
-| **Topic Sentiment** | Earnings-topic news | **+0.021** | 3.4 | **+0.48%** | 10 days |
-| **Insider Cluster** | Multi-insider buying | **+0.08** | 1.9 | **+3-5%** | 90 days |
-| **ML Ranking (XGBoost)** | Technical + fundamental | **+0.12** | 2.5 | **+16.4%** | 63 days |
-| **Filing Tone** | 10-K tone change (YoY) | **+0.04** | 1.5 | **+3-4%** | 90 days |
-| **Sector Momentum** | Relative strength rotation | **+0.07** | 1.8 | **+2-4%** | 60 days |
+| **Enhanced PEAD** | Big earnings surprises (>20%) | **+0.152** | 2.8 | **+3.55%** | 60 days |
+| **ML Ranking (XGBoost)** | Technical + fundamental + sentiment | **+0.145** | 7.6 | **+36.2%** | 21 days |
 | **Quality-Value** | Profitability + value | **+0.10** | 2.2 | **+2-3%** | 90 days |
+| **Insider Cluster** | Multi-insider buying | **+0.08** | 1.9 | **+3-5%** | 90 days |
+| **Sector Momentum** | Relative strength rotation | **+0.07** | 1.8 | **+2-4%** | 60 days |
 | **Earnings Call Qual** | Transcript tone analysis | **+0.05** | 1.6 | **+2-3%** | 60 days |
+| **Filing Tone** | 10-K tone change (YoY) | **+0.04** | 1.5 | **+3-4%** | 90 days |
+| **Topic Sentiment** | Earnings-topic news | **+0.021** | 3.4 | **+0.48%** | 10 days |
 
 > All ICs are Spearman rank correlations with forward returns. Statistical significance at p<0.05.
+
+### Walk-Forward ML Backtest (Latest)
+
+33-period walk-forward backtest on S&P 100, 21-day rebalance, 252-day minimum training window:
+
+| Metric | Value |
+|--------|-------|
+| **Mean IC** | **+0.145** (t-stat: 7.61) |
+| **IC > 0** | **87.9%** of periods |
+| **Mean L/S Spread** | **+0.362** (t-stat: 5.90) |
+| **Top Quintile Return** | **+0.429** per period |
+| **Bottom Quintile Return** | **+0.067** per period |
+
+| Year | Mean IC | Mean L/S Spread | Periods |
+|------|---------|-----------------|---------|
+| 2023 | +0.151 | +0.315 | 8 |
+| 2024 | +0.109 | +0.386 | 12 |
+| 2025 | +0.161 | +0.310 | 12 |
 
 ---
 
@@ -169,10 +192,10 @@ vs Baselines:
   SPY Buy-Hold: Sharpe 0.83    ML beats by +0.71
 ```
 
-**Features Used (40+):**
-- **Technical**: Momentum (1M, 3M, 6M, 12M), short-term reversal, volatility, idiosyncratic vol, volume trends
-- **Fundamental**: Value (P/E, P/B, P/S), quality (ROE, ROA, gross margin), growth rates
-- **Sentiment**: FinBERT scores, topic-adjusted sentiment
+**Features Used (50+):**
+- **Technical**: Momentum (1M, 3M, 6M, 12M), short-term reversal (1/3/5-day), volatility, idiosyncratic vol, volume trends, abnormal volume
+- **Fundamental**: Value (P/E, P/B, P/S), quality (ROE, ROA, gross margin), growth rates, earnings revision momentum, analyst consensus/momentum/conviction
+- **Sentiment**: 11 real sentiment features from news.db (raw, label scores, pos ratio, 5/10/20d rolling averages, momentum, dispersion, news intensity, earnings FinBERT)
 - **Alternative**: Insider signals, early adopter scores
 
 **Training Protocol:**
@@ -414,6 +437,159 @@ Stage 3 (IC-Weighted Scoring):
 **Graceful Degradation:** If market data feeds fail (VIX, HYG, sector ETFs unavailable), the model falls back to neutral weights with no adjustment rather than crashing.
 
 **Academic Basis:** Asness, Moskowitz & Pedersen (2013) — value and momentum everywhere; Arnott et al. (2016) — factor timing via macro indicators; Bender et al. (2018) — regime-conditional factor allocation.
+
+---
+
+## 🧠 Enhanced ML Features
+
+### Real Sentiment Features (11 per ticker)
+
+**Function:** `compute_all_sentiment_features()` in `features/sentiment.py`
+
+Extracts 11 real sentiment signals per ticker from local news data, replacing placeholder features with production-grade signals.
+
+| Feature | Description |
+|---------|-------------|
+| `sent_raw` | Daily mean FinBERT score (-1 to +1) |
+| `sent_label` | Sentiment label score (-1/0/+1) |
+| `sent_pos_ratio` | Fraction of positive articles |
+| `sent_article_count` | Daily article count |
+| `sent_ma5` / `sent_ma10` / `sent_ma20` | 5/10/20-day rolling sentiment averages |
+| `sent_momentum` | Short-term vs long-term sentiment (MA5 − MA20) |
+| `sent_dispersion` | Rolling std of sentiment (disagreement) |
+| `sent_news_intensity` | Article count momentum (count_ma5 / count_ma20) |
+| `earnings_finbert` | Quarterly earnings call FinBERT (forward-filled) |
+
+**Data Sources:** `data/news.db` (210K+ articles with FinBERT scores), `data/sentiment_500.csv` (earnings call sentiment)
+
+### Short-Term Reversal Signals
+
+**Function:** `compute_short_term_reversal(returns, windows=(1, 3, 5))` in `features/technical.py`
+
+Captures mean-reversion at short horizons — losers over 1-5 days tend to bounce.
+
+- Features: `reversal_1d`, `reversal_3d`, `reversal_5d`
+- Computed as negative cumulative past returns (negative = expected bounce)
+
+### Abnormal Volume
+
+**Function:** `compute_abnormal_volume(volume, window=20)` in `features/technical.py`
+
+Detects unusual trading activity relative to 20-day rolling average.
+
+- Features: `abnormal_volume` (raw ratio), `log_abnormal_volume` (log-normalized)
+- Volume spikes often precede significant price moves
+
+### Analyst Rating Momentum
+
+**Function:** `compute_analyst_momentum(tickers)` in `features/technical.py`
+
+Extracts sell-side analyst consensus and momentum from yfinance recommendation history.
+
+| Feature | Description |
+|---------|-------------|
+| `analyst_consensus` | Weighted score: `(strongBuy×2 + buy − sell − strongSell×2) / total` |
+| `analyst_momentum` | Month-over-month consensus change (upgrades are positive) |
+| `analyst_conviction` | Fraction of analysts with strong opinions |
+
+### Earnings Revision Signal
+
+**Function:** `compute_earnings_revision_signal(tickers)` in `features/technical.py`
+
+Tracks sell-side earnings estimate changes and historical beat patterns.
+
+| Feature | Description |
+|---------|-------------|
+| `earnings_growth_0q` | Current quarter expected EPS growth |
+| `earnings_revision_momentum` | Current vs next year growth (acceleration) |
+| `earnings_surprise_avg` | Average historical surprise (%) |
+| `earnings_surprise_trend` | Latest minus oldest surprise (improving track record) |
+
+---
+
+## 📐 Mean-Variance Portfolio Optimization
+
+**Function:** `_mean_variance_weights()` in `backtest/enhanced_portfolio.py`
+
+Closed-form mean-variance optimization with Ledoit-Wolf shrinkage, available as a portfolio weighting scheme.
+
+**Optimization Problem:**
+$$\max_w \; w'\mu - \frac{\gamma}{2} w'\Sigma w \quad \text{s.t.} \quad \sum w_i = 1, \; 0 \leq w_i \leq w_{\max}$$
+
+**Covariance Shrinkage (Ledoit-Wolf 2004):**
+$$\Sigma_{\text{shrunk}} = \alpha F + (1-\alpha) S$$
+
+where $F = \frac{\text{tr}(S)}{p} I$ (scaled identity target) and $\alpha$ is the optimal shrinkage intensity.
+
+| Shrinkage Option | Description |
+|------------------|-------------|
+| `ledoit_wolf` | Optimal shrinkage (default) |
+| `identity` | Diagonal variance only |
+| `none` | Sample covariance (no shrinkage) |
+
+Falls back to inverse-variance weighting if matrix inversion fails.
+
+---
+
+## 🔧 Walk-Forward Hyperparameter Tuning
+
+**File:** `src/auto_researcher/models/hyperparam_tuner.py`
+
+Bayesian hyperparameter optimization via Optuna TPE sampler with time-series cross-validation.
+
+**Function:** `tune_xgb_hyperparams(X_train, y_train, config=None, base_params=None)`
+
+**Search Space:**
+| Parameter | Range | Scale |
+|-----------|-------|-------|
+| `max_depth` | [2, 7] | Integer |
+| `learning_rate` | [0.01, 0.15] | Log |
+| `n_estimators` | [100, 500] | Step 50 |
+| `subsample` | [0.6, 1.0] | Uniform |
+| `colsample_bytree` | [0.6, 1.0] | Uniform |
+| `reg_lambda` | [0.1, 10.0] | Log |
+| `reg_alpha` | [0.01, 5.0] | Log |
+
+- **Sampler:** Optuna TPE (Tree-structured Parzen Estimator) with warm-start from defaults
+- **CV:** Expanding-window time-series splits (forward-looking only)
+- **Metrics:** Spearman IC (default) or negative MSE
+- **Budget:** 20 trials per fold, 120-second timeout
+- **Integration:** Enabled via `auto_tune=True` in backtest runner
+
+---
+
+## 🛡️ Risk-Aware Position Sizing Integration
+
+The backtest runner integrates the `PositionSizer` module for risk-managed portfolio construction, enabled via `use_risk_sizing=True` in portfolio config.
+
+**Workflow:**
+1. Build initial portfolio weights (rank-weighted or equal-weight)
+2. Extract 252-day historical returns for covariance estimation
+3. Apply `PositionSizer` with selected method + position limits
+4. Normalize adjusted weights to sum to 1.0
+5. Falls back to original weights if sizing fails
+
+**Available Methods:**
+| Method | Description |
+|--------|-------------|
+| `kelly` | Full Kelly criterion (aggressive) |
+| `fractional_kelly` | Kelly × 0.25 (conservative default) |
+| `volatility_target` | Inverse-vol scaled to target (default) |
+| `risk_parity` | Equal marginal risk contribution |
+| `equal_risk` | Equal-risk allocation |
+
+---
+
+## 🔍 Audit Fixes
+
+Recent audit improvements to eliminate data leakage and improve robustness:
+
+- **Look-Ahead Bias Fix:** Target computation uses expanding-window winsorization instead of full-sample statistics
+- **Forward Return Validation:** Detects stock splits/corporate actions that would corrupt returns (>200% or <-80%)
+- **Price Cache Fallback:** Validates date overlap between cache and requested range before using cached data
+- **Cross-Sectional Median:** Fundamentals data uses cross-sectional median fill instead of zero-fill for missing values
+- **Embargo Periods:** Walk-forward CV respects configurable embargo gap between train/test to prevent leakage
+- **Exception Handling:** Replaced 18 bare `except:` clauses across 6 agent files with specific exception types
 
 ---
 
@@ -686,6 +862,7 @@ auto_researcher/
 │   │   ├── patent_innovation.py        # Patent-based innovation signals
 │   │   ├── regimes.py                  # Regime-aware ML training/inference
 │   │   ├── factor_rotation.py          # Leading-indicator regime-aware factor rotation
+│   │   ├── hyperparam_tuner.py         # Optuna TPE walk-forward hyperparameter tuning
 │   │   └── fundamentals_alpha.py       # (disabled — forward bias detected)
 │   │
 │   ├── agents/                         # 12 Analysis Agents
@@ -723,7 +900,9 @@ auto_researcher/
 │   │   └── risk_attribution.py         # Factor decomposition, MCTR
 │   │
 │   ├── features/                       # Feature Engineering
-│   │   ├── technical.py                # Momentum, volatility, reversal
+│   │   ├── technical.py                # Momentum, volatility, reversal, abnormal volume, analyst momentum
+│   │   ├── sentiment.py                # 11 real sentiment features from news.db + earnings FinBERT
+│   │   ├── targets.py                  # Expanding-window winsorized targets with forward return validation
 │   │   ├── fundamentals.py             # Value, quality, growth factors
 │   │   └── feature_pipeline.py         # Feature orchestration
 │   │
@@ -745,12 +924,13 @@ auto_researcher/
 │   ├── backtest_*.py                   # Various backtesting scripts
 │   └── ...                             # 70+ analysis/debug scripts
 │
-├── tests/                              # 22+ test files
+├── tests/                              # 23+ test files
 │   ├── test_factor_rotation.py         # Factor rotation model tests (35 tests)
 │   ├── test_sector_rotation_overlay.py
 │   ├── test_transcript_vectorstore.py
 │   ├── test_risk.py
 │   ├── test_technical_features.py
+│   ├── test_targets.py                 # Target computation tests (winsorization, validation)
 │   └── ...
 │
 ├── data/                               # Data Storage
@@ -982,13 +1162,16 @@ python scripts/run_large_cap_backtest.py \
 | **Regime Detection** | Hamilton (1989), Ang & Bekaert (2002) |
 | **Factor Rotation** | Asness, Moskowitz & Pedersen (2013), Arnott et al. (2016), Bender et al. (2018) |
 | **Signal Assignment** | Grinold & Kahn (2000) — cross-sectional percentile ranking |
+| **Short-Term Reversal** | Jegadeesh (1990), Lehmann (1990) — 1-5 day mean reversion |
+| **Mean-Variance Optimization** | Markowitz (1952), Ledoit & Wolf (2004) — shrinkage estimation |
+| **Position Sizing** | Kelly (1956), Thorp (2006) — optimal bet sizing |
 
 ---
 
 ## 🧪 Testing
 
 ```bash
-# Run all tests (22+ test files)
+# Run all tests (23+ test files)
 pytest tests/ -v
 
 # Run specific test suite

@@ -303,6 +303,10 @@ if st.session_state.get("_available_runs") and not st.session_state.get("pipelin
             st.session_state["pipeline_ran"] = True
             st.session_state["run_filename"] = selected_run.name
             st.session_state["_available_runs"] = None  # Hide selector
+            st.session_state["perf_summary"] = None  # Reset stale performance data
+            # Clear date widget keys so they pick up the new run's auto_date
+            st.session_state.pop("perf_run_date", None)
+            st.session_state.pop("perf_end_date", None)
 
             # Check if reviews are embedded
             if final_data and any(
@@ -409,6 +413,8 @@ if st.session_state.get("pipeline_running"):
         st.session_state["pipeline_ran"] = True
         st.session_state["run_filename"] = f"pipeline_run_{datetime.now().strftime('%Y%m%d_%H%M')}"
         st.session_state["perf_summary"] = None  # Reset performance cache
+        st.session_state.pop("perf_run_date", None)  # Reset date widgets
+        st.session_state.pop("perf_end_date", None)
 
         if _PROGRESS_FILE.exists():
             _PROGRESS_FILE.unlink()
@@ -670,7 +676,7 @@ if st.session_state.get("pipeline_ran"):
                         ("Call Quality", stock.get("earnings_call_qual_score", 0)),
                     ]
                     breakdown_df = pd.DataFrame(score_fields, columns=["Agent", "Score"])
-                    st.bar_chart(breakdown_df.set_index("Agent"), color=["#2563eb"], horizontal=True)
+                    st.bar_chart(breakdown_df.set_index("Agent"), color=["#2563eb"])
         else:
             st.info("No agent data available.")
 

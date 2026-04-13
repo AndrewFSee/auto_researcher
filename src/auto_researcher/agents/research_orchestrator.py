@@ -264,7 +264,7 @@ class CacheManager:
         # Fallback - try to convert to string
         try:
             return str(obj)
-        except:
+        except (ValueError, TypeError):
             return None
     
     def get(self, namespace: str, identifier: str) -> Optional[dict]:

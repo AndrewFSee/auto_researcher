@@ -27,7 +27,10 @@ class TestPositionSizer:
     
     def test_equal_weight_sizing(self):
         """Test equal weight position sizing."""
-        sizer = PositionSizer(method=PositionSizingMethod.EQUAL_WEIGHT)
+        sizer = PositionSizer(
+            method=PositionSizingMethod.EQUAL_WEIGHT,
+            limits=PositionLimit(max_position_pct=1.0),
+        )
         
         positions = sizer.size_portfolio(
             tickers=["AAPL", "MSFT", "GOOGL"],
@@ -78,7 +81,10 @@ class TestPositionSizer:
     
     def test_shares_calculation(self):
         """Test that shares are calculated correctly."""
-        sizer = PositionSizer(method=PositionSizingMethod.EQUAL_WEIGHT)
+        sizer = PositionSizer(
+            method=PositionSizingMethod.EQUAL_WEIGHT,
+            limits=PositionLimit(max_position_pct=1.0),
+        )
         
         positions = sizer.size_portfolio(
             tickers=["AAPL"],

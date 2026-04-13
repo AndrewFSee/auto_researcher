@@ -60,7 +60,10 @@ class EnhancedModelConfig:
     robust_objective: bool = False  # Use reg:pseudohubererror instead of reg:squarederror
     use_shap_selection: bool = False  # Use SHAP to select top features
     shap_top_k_features: int = 15  # Number of top features to keep when using SHAP
-    
+    auto_tune: bool = False  # Walk-forward hyperparameter tuning via Optuna
+    auto_tune_trials: int = 20  # Number of Optuna trials per rebalance period
+    auto_tune_interval: int = 3  # Re-tune every N rebalance periods (not every one)
+
     # XGBoost hyperparameters (None means use defaults)
     xgb_max_depth: int | None = None
     xgb_learning_rate: float | None = None
@@ -98,7 +101,10 @@ class EnhancedPortfolioConfig:
     rank_tau: float = 5.0
     neutralization: Literal["none", "vol", "beta", "vol_beta"] = "none"
     max_position_weight: float = 0.10
-    sector_neutral_ranking: bool = False  # NEW
+    sector_neutral_ranking: bool = False
+    use_risk_sizing: bool = False  # Apply PositionSizer risk overlay
+    risk_sizing_method: str = "volatility_target"  # kelly, fractional_kelly, volatility_target, risk_parity
+    risk_target_vol: float = 0.15  # 15% annualized portfolio vol target
 
 
 @dataclass(frozen=True)
@@ -125,6 +131,10 @@ class ResearchConfig:
     top_k: int = 10
     benchmark: str = "SPY"
     lookback_days: int = 252  # ~1 year for training
+    embargo_days: int | None = None  # Embargo period for walk-forward CV.
+    # Drops the last N days of training labels to eliminate overlap with
+    # the evaluation period. If None, defaults to horizon_days (full embargo).
+    # Set to 0 to preserve legacy behavior (no embargo).
 
 
 @dataclass(frozen=True)

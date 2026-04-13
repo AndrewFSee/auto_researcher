@@ -222,10 +222,182 @@ def compute_moving_average_ratio(
     return short_ma / long_ma
 
 
+def compute_short_term_reversal(
+    returns: pd.DataFrame,
+    windows: tuple[int, ...] = (1, 3, 5),
+) -> dict[tuple[str, str], pd.Series]:
+    """
+    Compute short-term reversal signals.
+
+    Short-term (1-5 day) returns tend to reverse, especially in liquid stocks.
+    Negative past returns predict positive future returns at very short horizons.
+
+    Args:
+        returns: Daily returns DataFrame with tickers as columns.
+        windows: Lookback windows for reversal signal.
+
+    Returns:
+        Dictionary of (ticker, feature_name) -> Series.
+    """
+    features = {}
+    for window in windows:
+        rev = -returns.rolling(window=window).sum()
+        for ticker in rev.columns:
+            features[(ticker, f"reversal_{window}d")] = rev[ticker]
+    return features
+
+
+def compute_abnormal_volume(
+    volume: pd.DataFrame,
+    window: int = 20,
+) -> dict[tuple[str, str], pd.Series]:
+    """
+    Compute abnormal volume as ratio to rolling average.
+
+    Abnormal volume often precedes or accompanies price moves.
+    Values > 1 indicate above-average trading activity.
+
+    Args:
+        volume: Volume DataFrame with tickers as columns.
+        window: Lookback window for average volume (default 20 days).
+
+    Returns:
+        Dictionary of (ticker, feature_name) -> Series.
+    """
+    features = {}
+    avg_vol = volume.rolling(window=window, min_periods=max(1, window // 2)).mean()
+    ratio = volume / avg_vol.replace(0, np.nan)
+
+    for ticker in volume.columns:
+        features[(ticker, "abnormal_volume")] = ratio[ticker]
+        # Log volume ratio is more normally distributed
+        features[(ticker, "log_abnormal_volume")] = np.log1p(ratio[ticker].clip(lower=0))
+    return features
+
+
+def compute_earnings_revision_signal(
+    tickers: list[str],
+) -> dict[tuple[str, str], float]:
+    """
+    Compute earnings revision momentum from yfinance analyst estimates.
+
+    Earnings revisions (changes in consensus EPS estimates) are one of the
+    strongest known alpha signals. Positive revisions predict positive returns.
+
+    Features:
+    - earnings_growth_0q: Current quarter expected EPS growth vs year-ago
+    - earnings_surprise_avg: Average earnings surprise over recent quarters
+    - earnings_revision_momentum: Current quarter growth minus next year growth
+      (positive = accelerating expectations)
+
+    Args:
+        tickers: List of ticker symbols.
+
+    Returns:
+        Dictionary of (ticker, feature) -> scalar value.
+    """
+    import yfinance as yf
+
+    features = {}
+    for ticker in tickers:
+        try:
+            t = yf.Ticker(ticker)
+
+            # Current quarter estimate growth
+            est = t.earnings_estimate
+            if est is not None and not est.empty and "growth" in est.columns:
+                # Current quarter growth (0q)
+                if "0q" in est.index:
+                    growth_0q = est.loc["0q", "growth"]
+                    if pd.notna(growth_0q):
+                        features[(ticker, "earnings_growth_0q")] = float(growth_0q)
+
+                # Revision momentum: current quarter vs next year (acceleration)
+                if "0q" in est.index and "+1y" in est.index:
+                    g0 = est.loc["0q", "growth"]
+                    g1y = est.loc["+1y", "growth"]
+                    if pd.notna(g0) and pd.notna(g1y):
+                        features[(ticker, "earnings_revision_momentum")] = float(g0 - g1y)
+
+            # Historical surprise track record
+            hist = t.earnings_history
+            if hist is not None and not hist.empty and "surprisePercent" in hist.columns:
+                surprises = hist["surprisePercent"].dropna()
+                if len(surprises) >= 2:
+                    features[(ticker, "earnings_surprise_avg")] = float(surprises.mean())
+                    # Trend of surprises (improving or deteriorating beat record)
+                    features[(ticker, "earnings_surprise_trend")] = float(
+                        surprises.iloc[-1] - surprises.iloc[0]
+                    )
+
+        except (ValueError, TypeError, KeyError, IndexError):
+            continue
+
+    return features
+
+
+def compute_analyst_momentum(
+    tickers: list[str],
+) -> dict[tuple[str, str], float]:
+    """
+    Compute analyst rating momentum from yfinance recommendations.
+
+    Converts recommendation counts into a consensus score (-1 to +1) and
+    computes the change vs prior month. Positive momentum = upgrades.
+
+    Score = (strongBuy*2 + buy*1 + hold*0 + sell*-1 + strongSell*-2) / total
+
+    Args:
+        tickers: List of ticker symbols.
+
+    Returns:
+        Dictionary of (ticker, feature) -> scalar value (point-in-time snapshot).
+    """
+    import yfinance as yf
+
+    features = {}
+    for ticker in tickers:
+        try:
+            t = yf.Ticker(ticker)
+            recs = t.recommendations
+            if recs is None or recs.empty or len(recs) < 2:
+                continue
+
+            def _consensus(row):
+                total = row["strongBuy"] + row["buy"] + row["hold"] + row["sell"] + row["strongSell"]
+                if total == 0:
+                    return np.nan
+                score = (
+                    row["strongBuy"] * 2 + row["buy"] * 1
+                    + row["sell"] * -1 + row["strongSell"] * -2
+                ) / total
+                return score
+
+            current = _consensus(recs.iloc[0])
+            previous = _consensus(recs.iloc[1])
+
+            if pd.notna(current):
+                features[(ticker, "analyst_consensus")] = current
+            if pd.notna(current) and pd.notna(previous):
+                features[(ticker, "analyst_momentum")] = current - previous
+                # Coverage ratio: fraction of analysts with strong opinion
+                row = recs.iloc[0]
+                total = row["strongBuy"] + row["buy"] + row["hold"] + row["sell"] + row["strongSell"]
+                if total > 0:
+                    features[(ticker, "analyst_conviction")] = (
+                        row["strongBuy"] + row["strongSell"]
+                    ) / total
+        except (ValueError, TypeError, KeyError, IndexError):
+            continue
+
+    return features
+
+
 def compute_all_technical_features(
     prices: pd.DataFrame,
     momentum_windows: tuple[int, ...] = (21, 63, 126, 252),
     volatility_windows: tuple[int, ...] = (21, 63),
+    volume: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Compute all technical features for a price DataFrame.
@@ -234,38 +406,49 @@ def compute_all_technical_features(
         prices: Price DataFrame with tickers as columns and DatetimeIndex.
         momentum_windows: Windows for momentum calculations.
         volatility_windows: Windows for volatility calculations.
+        volume: Optional volume DataFrame with same structure as prices.
 
     Returns:
         DataFrame with MultiIndex columns (ticker, feature_name).
     """
     returns = compute_returns(prices)
-    
+
     features = {}
-    
+
     # Momentum features
     for window in momentum_windows:
         mom = compute_momentum_simple(returns, window)
         for ticker in mom.columns:
             features[(ticker, f"mom_{window}")] = mom[ticker]
-    
+
     # Volatility features
     for window in volatility_windows:
         vol = compute_volatility(returns, window)
         for ticker in vol.columns:
             features[(ticker, f"vol_{window}")] = vol[ticker]
-    
+
     # RSI
     rsi = compute_rsi(prices)
     for ticker in rsi.columns:
         features[(ticker, "rsi_14")] = rsi[ticker]
-    
+
     # MA ratios
     ma_ratio = compute_moving_average_ratio(prices, 20, 50)
     for ticker in ma_ratio.columns:
         features[(ticker, "ma_ratio_20_50")] = ma_ratio[ticker]
-    
+
+    # Short-term reversal (1, 3, 5 day)
+    features.update(compute_short_term_reversal(returns))
+
+    # Abnormal volume
+    if volume is not None:
+        # Align volume columns to price columns
+        common_tickers = prices.columns.intersection(volume.columns)
+        if len(common_tickers) > 0:
+            features.update(compute_abnormal_volume(volume[common_tickers]))
+
     # Combine into DataFrame
     result = pd.DataFrame(features)
     result.columns = pd.MultiIndex.from_tuples(result.columns, names=["ticker", "feature"])
-    
+
     return result

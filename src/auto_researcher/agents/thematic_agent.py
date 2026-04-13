@@ -379,7 +379,7 @@ class ThematicAnalysisAgent:
         try:
             info = yf.Ticker(ticker).info
             return info.get("sector", "Unknown")
-        except:
+        except Exception:
             return "Unknown"
     
     def _add_sector_momentum_signals(self, result: ThematicAnalysis) -> None:

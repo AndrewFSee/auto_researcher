@@ -316,7 +316,7 @@ class SECEdgarClient:
                 
                 try:
                     filing_date = datetime.strptime(dates[i], "%Y-%m-%d")
-                except:
+                except (ValueError, TypeError):
                     filing_date = datetime.now()
                 
                 filings.append(SECFiling(
@@ -478,7 +478,7 @@ Focus on:
                     try:
                         risk_score = float(line.split(":", 1)[1].strip())
                         risk_score = max(0.0, min(1.0, risk_score))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("RISK_LABEL:"):
                     label = line.split(":", 1)[1].strip().lower()

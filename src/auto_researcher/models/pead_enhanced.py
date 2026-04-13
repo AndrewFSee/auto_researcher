@@ -181,17 +181,29 @@ class EnhancedPEADModel:
     3. Incorporates consecutive beat/miss pattern
     """
     
-    def __init__(self, cache_ttl_hours: int = 24):
+    def __init__(
+        self,
+        cache_ttl_hours: int = 24,
+        require_big_surprise: bool = True,
+    ):
         """
         Initialize the model.
-        
+
         Args:
             cache_ttl_hours: How long to cache earnings data (hours).
+            require_big_surprise: If True (default), only generate actionable signals
+                for big surprises (|SUE| > 20%). This improves IC from 0.049 to 0.152
+                (3x improvement) at the cost of fewer signals (N=334 vs N=1948).
+                Set to False to use all earnings events.
         """
         self.cache_ttl_hours = cache_ttl_hours
+        self.require_big_surprise = require_big_surprise
         self._cache: Dict[str, tuple[datetime, List[EarningsEvent]]] = {}
-        
-        logger.info("Initialized EnhancedPEADModel")
+
+        logger.info(
+            f"Initialized EnhancedPEADModel "
+            f"(require_big_surprise={require_big_surprise})"
+        )
     
     def _fetch_earnings(self, ticker: str) -> List[EarningsEvent]:
         """Fetch earnings history from yfinance, including revenue data."""
@@ -473,7 +485,16 @@ class EnhancedPEADModel:
                     reasons.append(f"Revenue: {latest.revenue_surprise*100:+.1f}% YoY")
         
         # Actionability check
-        if signal.data_freshness in ["fresh", "recent"] and signal.strength in ["strong", "moderate"]:
+        # When require_big_surprise=True (default), only big surprises are actionable.
+        # This improves IC from 0.049 to 0.152 (3x) by filtering to high-conviction events.
+        if self.require_big_surprise and not signal.is_big_surprise:
+            signal.is_actionable = False
+            if abs(latest.sue) >= 0.05:
+                reasons.append(
+                    f"Small surprise ({latest.sue*100:+.1f}%) filtered out "
+                    f"(require_big_surprise=True, threshold={PEAD_CONFIG['thresholds']['big_surprise']*100:.0f}%)"
+                )
+        elif signal.data_freshness in ["fresh", "recent"] and signal.strength in ["strong", "moderate"]:
             signal.is_actionable = True
             signal.recommended_days = 40  # Peak IC
         elif signal.data_freshness == "stale" and signal.strength in ["strong", "moderate"]:
@@ -481,7 +502,7 @@ class EnhancedPEADModel:
             signal.recommended_days = 20  # Less time for drift
             reasons.append("Note: Earnings are 30-60d old, some drift may have occurred")
         elif signal.data_freshness in ["fresh", "recent"] and signal.strength == "weak" and abs(latest.sue) >= 0.05:
-            # Weak but still tradeable
+            # Weak but still tradeable (only reachable when require_big_surprise=False)
             signal.is_actionable = True
             signal.recommended_days = 40
             reasons.append("Note: Small surprise - weaker signal, consider smaller position")

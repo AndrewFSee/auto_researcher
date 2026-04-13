@@ -299,7 +299,7 @@ class DefeatBetaTranscriptSource(TranscriptSource):
             if isinstance(report_date, str):
                 try:
                     call_date = datetime.strptime(report_date[:10], '%Y-%m-%d')
-                except:
+                except (ValueError, TypeError):
                     call_date = datetime.now()
             else:
                 call_date = pd.Timestamp(report_date).to_pydatetime()
@@ -529,7 +529,7 @@ class YahooEarningsSource(TranscriptSource):
                     text_parts.append(f"\nEARNINGS CALENDAR:")
                     for col in calendar.columns[:2]:
                         text_parts.append(f"  {col}: {calendar[col].iloc[0] if len(calendar) > 0 else 'N/A'}")
-            except:
+            except (AttributeError, TypeError, IndexError, KeyError):
                 pass
             
             # Determine quarter
@@ -874,7 +874,7 @@ Focus on:
                     try:
                         confidence_level = float(line.split(":", 1)[1].strip())
                         confidence_level = max(0.0, min(1.0, confidence_level))
-                    except:
+                    except (ValueError, TypeError):
                         pass
                 elif line.startswith("REVENUE_COMMENTARY:"):
                     revenue_commentary = line.split(":", 1)[1].strip()

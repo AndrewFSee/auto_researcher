@@ -92,66 +92,151 @@ def compute_realized_volatility(
     return vol
 
 
+def validate_forward_returns(
+    forward_returns: pd.DataFrame,
+    max_return: float = 5.0,
+    min_return: float = -0.90,
+    min_coverage: float = 0.1,
+) -> pd.DataFrame:
+    """
+    Validate forward returns and flag suspicious values.
+
+    Detects likely stock splits or data errors (extreme returns) and
+    warns about tickers with very low data coverage.
+
+    Args:
+        forward_returns: DataFrame of forward returns.
+        max_return: Maximum plausible return (default +500%). Returns above
+            this are set to NaN (likely stock split or data error).
+        min_return: Minimum plausible return (default -90%). Returns below
+            this are set to NaN.
+        min_coverage: Minimum fraction of non-NaN values per ticker.
+            Tickers below this threshold trigger a warning.
+
+    Returns:
+        Cleaned DataFrame with extreme returns set to NaN.
+    """
+    result = forward_returns.copy()
+
+    # Flag extreme returns (likely stock splits or data errors)
+    extreme_mask = (result > max_return) | (result < min_return)
+    n_extreme = extreme_mask.sum().sum()
+    if n_extreme > 0:
+        extreme_tickers = extreme_mask.any(axis=0)
+        affected = list(extreme_tickers[extreme_tickers].index)
+        logger.warning(
+            f"Found {n_extreme} extreme forward returns (>{max_return:.0%} or "
+            f"<{min_return:.0%}) in {len(affected)} tickers: {affected[:10]}. "
+            f"Setting to NaN (likely stock splits or data errors)."
+        )
+        result[extreme_mask] = np.nan
+
+    # Warn about low coverage tickers
+    for col in result.columns:
+        coverage = result[col].notna().mean()
+        if coverage < min_coverage:
+            logger.warning(
+                f"Ticker {col} has very low forward return coverage "
+                f"({coverage:.1%} non-NaN). Horizon may exceed available data."
+            )
+
+    return result
+
+
 def compute_vol_normalized_targets(
     prices: pd.DataFrame,
     horizon_days: int,
     vol_lookback: int | None = None,
     benchmark: str | None = None,
     epsilon: float = 1e-8,
+    winsorize_mode: Literal["expanding", "full"] = "expanding",
 ) -> pd.DataFrame:
     """
     Compute volatility-normalized forward returns.
-    
+
     Target = forward_return / realized_volatility
-    
+
     This approximates an "IR-like" return per unit of volatility, reducing
     the dominance of high-volatility names in the target.
-    
+
     Args:
         prices: Price DataFrame with tickers as columns.
         horizon_days: Forward return horizon in trading days.
         vol_lookback: Lookback window for volatility. If None, uses horizon_days.
         benchmark: Benchmark ticker to exclude from returns (optional).
         epsilon: Small value to prevent division by zero.
-    
+        winsorize_mode: How to compute winsorization bounds.
+            - "expanding": Use expanding-window stats (only past data at each point).
+              Prevents look-ahead bias in target construction.
+            - "full": Use full-sample stats (legacy behavior, has look-ahead bias).
+
     Returns:
         DataFrame of volatility-normalized targets.
     """
     if vol_lookback is None:
         vol_lookback = horizon_days
-    
+
     # Get stock prices (exclude benchmark)
     if benchmark and benchmark in prices.columns:
         stock_prices = prices.drop(columns=[benchmark])
     else:
         stock_prices = prices
-    
+
     # Compute forward returns: (price_{t+h} / price_t) - 1
     forward_returns = stock_prices.pct_change(periods=horizon_days).shift(-horizon_days)
-    
+
+    # Validate forward returns (flag stock splits, extreme outliers)
+    forward_returns = validate_forward_returns(forward_returns)
+
     # Compute realized volatility at time t (uses past data)
     realized_vol = compute_realized_volatility(stock_prices, window=vol_lookback, annualize=False)
-    
+
     # Scale volatility to horizon (approximate: multiply by sqrt(horizon_days))
     horizon_vol = realized_vol * np.sqrt(horizon_days)
-    
+
     # Compute vol-normalized target
     vol_norm_target = forward_returns / (horizon_vol + epsilon)
-    
-    # Clip extreme values for stability (optional, based on z-score)
-    # Winsorize at 3 std to prevent extreme outliers
-    for col in vol_norm_target.columns:
-        valid = vol_norm_target[col].dropna()
-        if len(valid) > 10:
-            mean_val = valid.mean()
-            std_val = valid.std()
-            if std_val > 0:
-                lower = mean_val - 3 * std_val
-                upper = mean_val + 3 * std_val
-                vol_norm_target[col] = vol_norm_target[col].clip(lower=lower, upper=upper)
-    
-    logger.info(f"Computed vol-normalized targets with horizon={horizon_days}d, vol_lookback={vol_lookback}d")
-    
+
+    # Clip extreme values for stability (winsorize at 3 std)
+    if winsorize_mode == "expanding":
+        # Expanding-window: only use data up to each point in time
+        # Prevents look-ahead bias (future data cannot influence past bounds)
+        for col in vol_norm_target.columns:
+            series = vol_norm_target[col]
+            expanding_mean = series.expanding(min_periods=10).mean()
+            expanding_std = series.expanding(min_periods=10).std()
+            valid_mask = expanding_std > 0
+            lower = expanding_mean - 3 * expanding_std
+            upper = expanding_mean + 3 * expanding_std
+            clipped = series.copy()
+            mask = valid_mask & series.notna()
+            clipped[mask] = series[mask].clip(
+                lower=lower[mask], upper=upper[mask]
+            )
+            vol_norm_target[col] = clipped
+    elif winsorize_mode == "full":
+        # Legacy behavior: full-sample stats (has look-ahead bias)
+        logger.warning(
+            "Using winsorize_mode='full' -- this has look-ahead bias. "
+            "Use 'expanding' for unbiased targets."
+        )
+        for col in vol_norm_target.columns:
+            valid = vol_norm_target[col].dropna()
+            if len(valid) > 10:
+                mean_val = valid.mean()
+                std_val = valid.std()
+                if std_val > 0:
+                    lower = mean_val - 3 * std_val
+                    upper = mean_val + 3 * std_val
+                    vol_norm_target[col] = vol_norm_target[col].clip(lower=lower, upper=upper)
+    else:
+        raise ValueError(f"Unknown winsorize_mode: {winsorize_mode}")
+
+    logger.info(
+        f"Computed vol-normalized targets with horizon={horizon_days}d, "
+        f"vol_lookback={vol_lookback}d, winsorize_mode={winsorize_mode}"
+    )
+
     return vol_norm_target
 
 
@@ -182,7 +267,10 @@ def compute_forward_returns(
     
     # Forward return: (price_{t+h} / price_t) - 1
     forward_ret = stock_prices.pct_change(periods=horizon_days).shift(-horizon_days)
-    
+
+    # Validate forward returns (flag stock splits, extreme outliers)
+    forward_ret = validate_forward_returns(forward_ret)
+
     return forward_ret
 
 

@@ -15,6 +15,7 @@ import logging
 
 import numpy as np
 import pandas as pd
+from scipy import linalg
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class EnhancedPortfolioConfig:
     """
     
     top_k: int = 25
-    weighting_scheme: Literal["equal", "rank", "score"] = "rank"
+    weighting_scheme: Literal["equal", "rank", "score", "mean_variance"] = "rank"
     rank_tau: float = 5.0
     neutralization: Literal["none", "vol", "beta", "vol_beta"] = "none"
     target_vol: float = 0.15  # 15% annualized
@@ -94,6 +95,140 @@ class EnhancedPortfolioConfig:
     sector_max_weight: float = 0.30  # 30% max per sector
     sector_neutral_ranking: bool = False  # NEW: rank within sectors first
     min_stocks_per_sector: int = 1  # NEW: minimum picks per sector
+    mv_risk_aversion: float = 1.0  # Risk aversion for mean-variance (higher = more conservative)
+    mv_shrinkage: Literal["ledoit_wolf", "identity", "none"] = "ledoit_wolf"
+
+
+def _ledoit_wolf_shrinkage(returns: pd.DataFrame) -> np.ndarray:
+    """
+    Compute Ledoit-Wolf shrinkage covariance estimator.
+
+    Shrinks the sample covariance toward a structured target (scaled identity)
+    to produce a better-conditioned estimate. This is critical for mean-variance
+    optimization where inverted covariance matrices amplify estimation error.
+
+    Args:
+        returns: Daily returns DataFrame (dates x tickers).
+
+    Returns:
+        Shrunk covariance matrix as ndarray.
+    """
+    X = returns.dropna().values
+    n, p = X.shape
+    if n < 2 or p < 1:
+        return np.eye(p) * 0.04  # Default ~20% vol
+
+    # Sample covariance
+    X_centered = X - X.mean(axis=0)
+    S = (X_centered.T @ X_centered) / (n - 1)
+
+    # Target: scaled identity (average variance on diagonal)
+    mu = np.trace(S) / p
+    F = mu * np.eye(p)
+
+    # Optimal shrinkage intensity (Ledoit-Wolf 2004)
+    delta = S - F
+    sum_sq_delta = np.sum(delta ** 2)
+
+    # Compute sum of squared cross-products of centered data
+    X2 = X_centered ** 2
+    pi_hat = (1.0 / n) * np.sum(X2.T @ X2) - np.sum(S ** 2)
+    pi_hat = max(0, pi_hat / (n - 1))
+
+    # Shrinkage intensity
+    if sum_sq_delta > 0:
+        alpha = min(1.0, max(0.0, pi_hat / (n * sum_sq_delta)))
+    else:
+        alpha = 1.0
+
+    # Shrunk estimator
+    sigma = alpha * F + (1 - alpha) * S
+    logger.debug(f"Ledoit-Wolf shrinkage: alpha={alpha:.3f}, p={p}, n={n}")
+    return sigma
+
+
+def _mean_variance_weights(
+    expected_returns: pd.Series,
+    returns_history: pd.DataFrame,
+    risk_aversion: float = 1.0,
+    shrinkage: str = "ledoit_wolf",
+    max_weight: float = 0.10,
+) -> pd.Series:
+    """
+    Compute mean-variance optimal portfolio weights (long-only).
+
+    Uses quadratic programming formulation:
+        max  w'mu - (gamma/2) * w'Sigma*w
+        s.t. sum(w) = 1, 0 <= w_i <= max_weight
+
+    Falls back to inverse-variance if optimization fails.
+
+    Args:
+        expected_returns: Expected returns per ticker (e.g., model scores as proxy).
+        returns_history: Historical daily returns (dates x tickers).
+        risk_aversion: Risk aversion parameter gamma.
+        shrinkage: Covariance shrinkage method.
+        max_weight: Maximum single position weight.
+
+    Returns:
+        Series of portfolio weights.
+    """
+    tickers = expected_returns.index.tolist()
+    n = len(tickers)
+
+    # Align returns to selected tickers
+    hist = returns_history.reindex(columns=tickers).dropna(how="all")
+    if len(hist) < 30:
+        logger.warning("Insufficient history for MVO, falling back to equal weight")
+        return pd.Series(1.0 / n, index=tickers)
+
+    # Compute covariance matrix
+    if shrinkage == "ledoit_wolf":
+        sigma = _ledoit_wolf_shrinkage(hist)
+    elif shrinkage == "identity":
+        diag_var = hist.var().values
+        sigma = np.diag(diag_var)
+    else:
+        sigma = hist.cov().values
+
+    # Scale expected returns to be proportional to scores
+    mu = expected_returns.values.astype(float)
+
+    # Try closed-form solution with clipping (no external optimizer needed)
+    # w* = (1/gamma) * Sigma^-1 * mu, then project to constraints
+    try:
+        sigma_inv = linalg.inv(sigma)
+        raw_w = (1.0 / risk_aversion) * sigma_inv @ mu
+
+        # Project to long-only simplex with max weight constraint
+        raw_w = np.maximum(raw_w, 0)  # Long-only
+        raw_w = np.minimum(raw_w, max_weight)  # Max weight
+
+        total = raw_w.sum()
+        if total > 0:
+            weights = raw_w / total
+        else:
+            weights = np.ones(n) / n
+
+        # Iterative clipping to enforce max_weight after normalization
+        for _ in range(10):
+            excess = weights - max_weight
+            if (excess > 0).any():
+                weights = np.minimum(weights, max_weight)
+                total = weights.sum()
+                if total > 0:
+                    weights = weights / total
+                else:
+                    break
+            else:
+                break
+
+    except linalg.LinAlgError:
+        logger.warning("Covariance matrix singular, falling back to inverse-variance")
+        inv_var = 1.0 / np.diag(sigma).clip(min=1e-8)
+        weights = inv_var / inv_var.sum()
+
+    return pd.Series(weights, index=tickers)
 
 
 def build_rank_weighted_portfolio(
@@ -102,6 +237,7 @@ def build_rank_weighted_portfolio(
     volatilities: Optional[pd.Series] = None,
     betas: Optional[pd.Series] = None,
     sectors: Optional[pd.Series] = None,
+    returns_history: Optional[pd.DataFrame] = None,
 ) -> dict[str, float]:
     """
     Build a portfolio with rank-based weighting and optional risk adjustments.
@@ -164,7 +300,28 @@ def build_rank_weighted_portfolio(
         else:
             shifted = top_stocks
         raw_weights = shifted / shifted.sum()
-    
+
+    elif config.weighting_scheme == "mean_variance":
+        if returns_history is None:
+            logger.warning(
+                "Mean-variance weighting requested but no returns_history provided, "
+                "falling back to rank weighting"
+            )
+            ranks = pd.Series(
+                range(1, len(selected_tickers) + 1),
+                index=selected_tickers,
+            )
+            raw_weights = np.exp(-ranks / config.rank_tau)
+            raw_weights = raw_weights / raw_weights.sum()
+        else:
+            raw_weights = _mean_variance_weights(
+                expected_returns=top_stocks,
+                returns_history=returns_history,
+                risk_aversion=config.mv_risk_aversion,
+                shrinkage=config.mv_shrinkage,
+                max_weight=config.max_position_weight,
+            )
+
     else:
         raise ValueError(f"Unknown weighting_scheme: {config.weighting_scheme}")
     
@@ -576,10 +733,11 @@ def compute_portfolio_risk_stats(
     # Volatility stats
     if volatilities is not None:
         vols = volatilities.reindex(tickers).fillna(volatilities.median())
-        # Simple portfolio vol estimate (assuming zero correlation - lower bound)
-        # True vol requires correlation matrix
         stats["avg_stock_vol"] = (weight_series * vols).sum()
         stats["vol_weighted_avg"] = (vols * weight_series).sum()
+        # Portfolio vol using diagonal approximation (no correlation data here)
+        w = weight_series.values
+        stats["portfolio_vol_approx"] = float(np.sqrt(np.sum((w * vols.values) ** 2)))
     
     # Beta stats
     if betas is not None:

@@ -146,6 +146,7 @@ def _convert_feature_config(config: FeatureConfig) -> FeaturePipelineConfig:
 def build_feature_matrix(
     prices: pd.DataFrame,
     config: FeatureConfig | FeaturePipelineConfig | None = None,
+    volume: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """
     Build a complete feature matrix from price data.
@@ -163,6 +164,8 @@ def build_feature_matrix(
             - FeatureConfig (legacy): Converted internally to FeaturePipelineConfig
             - FeaturePipelineConfig: Full control over all feature sources
             Uses defaults if not provided.
+        volume: Optional volume DataFrame (same structure as prices). When provided,
+            abnormal volume features are computed.
 
     Returns:
         Feature matrix with MultiIndex columns (ticker, feature).
@@ -200,6 +203,7 @@ def build_feature_matrix(
             prices,
             momentum_windows=pipeline_config.momentum_windows,
             volatility_windows=pipeline_config.volatility_windows,
+            volume=volume,
         )
 
         # Prefix technical features with 'tech_' when fundamentals are enabled
@@ -247,10 +251,13 @@ def build_feature_matrix(
             logger.warning("No fundamental factors computed")
 
     # -------------------------------------------------------------------------
-    # Sentiment features (stub)
+    # Sentiment features (news.db + earnings call FinBERT)
     # -------------------------------------------------------------------------
     if pipeline_config.use_sentiment:
-        tickers = prices.columns.tolist()
+        if isinstance(prices.columns, pd.MultiIndex):
+            tickers = prices.columns.get_level_values(-1).unique().tolist()
+        else:
+            tickers = prices.columns.tolist()
         start = prices.index[0].strftime("%Y-%m-%d")
         end = prices.index[-1].strftime("%Y-%m-%d")
         sent_features = compute_all_sentiment_features(tickers, start, end)
@@ -601,10 +608,18 @@ def prepare_training_data(
     tech_cols = [c for c in X.columns if c.startswith('tech_')]
     fund_cols = [c for c in X.columns if not c.startswith('tech_')]
     
-    # For fundamental features, fill NaN with 0 (neutral value)
-    # This allows training even when some tickers lack fundamentals
-    if fund_cols:
+    # For fundamental features, fill NaN with cross-sectional median per date.
+    # This makes missing data "neutral" relative to peers, avoiding bias from
+    # zero-fill (where 0 has a specific meaning for PE, ROE, debt_to_equity, etc.)
+    if fund_cols and "date" in X.index.names:
+        for col in fund_cols:
+            X[col] = X[col].fillna(X.groupby(level="date")[col].transform("median"))
+        # If entire cross-section is NaN for a date, fall back to 0
         X[fund_cols] = X[fund_cols].fillna(0.0)
+    elif fund_cols:
+        for col in fund_cols:
+            median_val = X[col].median()
+            X[col] = X[col].fillna(median_val if pd.notna(median_val) else 0.0)
     
     # Drop rows where technical features or labels are NaN
     valid_mask = X[tech_cols].notna().all(axis=1) & y.notna() if tech_cols else y.notna()
