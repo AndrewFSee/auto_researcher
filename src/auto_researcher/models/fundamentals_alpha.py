@@ -102,7 +102,6 @@ ALPHA_CONFIG = {
         'optimal_horizon_days': (40, 60),
         'ic_ret5d': None,  # Was 0.008 - BIASED
         'ic_ret20d': None, # Was 0.002 - BIASED
-        'ic_ret20d': 0.002,  # Weak
         'ic_ret40d': None, # Was 0.148 - SEVERELY BIASED
         'ic_ret60d': None, # Was 0.161 - SEVERELY BIASED
         'oos_ic_ret60d': None,

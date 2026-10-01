@@ -84,7 +84,7 @@ def get_price_data(ticker: str, start_date: datetime, end_date: datetime) -> Opt
     return None
 
 
-def calculate_forward_returns(prices: pd.DataFrame, signal_date: datetime, periods: List[int] = [5, 10, 21]) -> Dict[int, float]:
+def calculate_forward_returns(prices: pd.DataFrame, signal_date: datetime, periods: tuple[int, ...] = (5, 10, 21)) -> Dict[int, float]:
     """Calculate forward returns from signal date."""
     returns = {}
     

@@ -567,20 +567,21 @@ class EarlyAdopterModel:
         logger.info("EarlyAdopterModel caches cleared")
     
     def _detect_sector(self, ticker: str) -> str:
-        """Detect GICS sector for a ticker using sector_momentum's lookup."""
+        """Detect GICS sector for a ticker using the static lookup table.
+
+        We deliberately avoid `yf.Ticker(ticker).info` as a fallback: that
+        call returns the *current* sector, which leaks into historical
+        backtests (a company that re-classified in 2023 would appear under
+        its new sector even when evaluated on 2018 features). The static
+        table in sector_momentum.TICKER_SECTORS is a point-in-time snapshot;
+        unknown tickers now return "" rather than a possibly-anachronistic
+        live lookup.
+        """
         try:
             from auto_researcher.models.sector_momentum import TICKER_SECTORS
             if ticker.upper() in TICKER_SECTORS:
                 return TICKER_SECTORS[ticker.upper()]
         except ImportError:
-            pass
-        
-        # Fallback: try yfinance
-        try:
-            import yfinance as yf
-            info = yf.Ticker(ticker).info
-            return info.get("sector", "")
-        except Exception:
             pass
         return ""
     

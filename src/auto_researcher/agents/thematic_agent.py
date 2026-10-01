@@ -510,9 +510,12 @@ class ThematicAnalysisAgent:
                 f"(pioneer={signal.pioneer_score:.2f}, techs={signal.total_techs_adopted})"
             )
             
-            # Adjust forward score based on pioneer status
-            # Based on backtest: high pioneers +49% vs low +23.7% = +25.3% spread
-            # Pioneer score explains ~12.5% incremental alpha (r=0.36)
+            # Adjust forward score based on pioneer status.
+            # The earlier r=0.36 / +25.3% spread numbers were produced by the
+            # pre-audit pipeline (calendar regimes, fundamentals without a
+            # filing-lag, sentiment forward-filled without embargo) — treat
+            # them as anecdotal until `scripts/validate_signal_ic.py` reruns
+            # the regression under purged CV.
             if signal.pioneer_score > 0:
                 # Scale: pioneer_score 0.5+ = strong alpha potential
                 ea_boost = (signal.pioneer_score - 0.3) * 0.3  # Max ~0.21 boost

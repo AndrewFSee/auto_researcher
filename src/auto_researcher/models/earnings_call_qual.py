@@ -74,7 +74,7 @@ QUAL_CONFIG = {
 
 HEDGING_WORDS = {
     # Core LM uncertainty
-    "approximately", "approximately", "assume", "assumed", "assuming",
+    "approximately", "assume", "assumed", "assuming",
     "assumption", "assumptions", "believe", "believed", "believes",
     "cautious", "cautiously", "conceivable", "conceivably",
     "conditional", "conditionally", "contingency", "contingent",

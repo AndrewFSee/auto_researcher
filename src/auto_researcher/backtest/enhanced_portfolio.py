@@ -823,11 +823,11 @@ def compute_portfolio_expected_return(
     expected_returns: pd.Series,
 ) -> float:
     """Compute expected portfolio return from individual expected returns.
-    
+
     Args:
         weights: Portfolio weights.
         expected_returns: Expected returns per ticker.
-    
+
     Returns:
         Expected portfolio return.
     """
@@ -838,3 +838,44 @@ def compute_portfolio_expected_return(
             if pd.notna(er):
                 total += weight * er
     return total
+
+
+# =============================================================================
+# PHASE 4 HOOK — DRAWDOWN-AWARE RISK MODE SELECTION
+# =============================================================================
+
+def pick_agent_risk_mode(
+    drawdown: "float | object",
+    risk_averse_threshold: float = -0.05,
+) -> str:
+    """Pick the AlphaAgents risk posture for the current drawdown state.
+
+    Accepts either a signed drawdown fraction (e.g. ``-0.08``) or a
+    :class:`~auto_researcher.risk.drawdown_control.DrawdownState`. In the
+    state case we pull ``state.drawdown_pct`` and ignore the rest.
+
+    Delegates the actual decision to
+    :func:`auto_researcher.agents.alpha_agents.select_risk_mode` so there's
+    exactly one place where the threshold lives. The thin wrapper exists
+    because portfolio code already imports from
+    ``backtest.enhanced_portfolio``; forcing a second import path for
+    risk-mode selection makes the Phase 4 wire-up harder to spot.
+
+    Args:
+        drawdown: Signed drawdown fraction or a ``DrawdownState``.
+        risk_averse_threshold: Drawdown at or below which we flip to
+            ``risk_averse``. Must match the threshold the debate was
+            calibrated on; keeping the default (-5%) matches
+            ``alpha_agents.select_risk_mode``.
+
+    Returns:
+        ``"risk_neutral"`` or ``"risk_averse"``.
+    """
+    from auto_researcher.agents.alpha_agents import select_risk_mode
+
+    if hasattr(drawdown, "drawdown_pct"):
+        dd_pct = float(drawdown.drawdown_pct)
+    else:
+        dd_pct = float(drawdown)
+
+    return select_risk_mode(dd_pct, risk_averse_threshold=risk_averse_threshold)

@@ -798,8 +798,10 @@ def run_random_strategy(
             else:
                 random_selections[date] = set()
         
-        def get_weights(date: pd.Timestamp, prices_hist: pd.DataFrame) -> dict[str, float]:
-            selected = random_selections.get(date, set())
+        def get_weights(
+            date: pd.Timestamp, prices_hist: pd.DataFrame, _sel: dict = random_selections
+        ) -> dict[str, float]:
+            selected = _sel.get(date, set())
             if not selected:
                 return {}
             weight = 1.0 / len(selected)
@@ -3987,6 +3989,10 @@ def print_ic_blend_interpretation(results: list[StrategyResult]) -> None:
 # ==============================================================================
 
 def main():
+    # UTF-8 output even when piped on Windows (see auto_researcher.console)
+    for _stream in (sys.stdout, sys.stderr):
+        if hasattr(_stream, "reconfigure"):
+            _stream.reconfigure(encoding="utf-8", errors="replace")
     # Parse arguments
     args = parse_args()
     

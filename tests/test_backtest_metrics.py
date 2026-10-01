@@ -14,6 +14,7 @@ from auto_researcher.backtest.metrics import (
     compute_max_drawdown,
     compute_hit_rate,
     compute_ic,
+    compute_ic_stats,
     compute_ir,
     compute_all_metrics,
 )
@@ -141,6 +142,16 @@ class TestSharpeRatio:
         
         assert sharpe_low_rf > sharpe_high_rf
 
+    def test_sharpe_is_mean_excess_over_std(self) -> None:
+        """Standard definition: mean / std * sqrt(periods), as assumed by DSR."""
+        r = pd.Series([0.02, -0.01, 0.03, 0.00, 0.01, -0.02])
+        expected = r.mean() / r.std() * np.sqrt(12)
+        assert compute_sharpe_ratio(r, periods_per_year=12) == pytest.approx(expected)
+
+    def test_sharpe_degenerate_inputs(self) -> None:
+        assert compute_sharpe_ratio(pd.Series([0.01])) == 0.0
+        assert compute_sharpe_ratio(pd.Series([0.01, 0.01, 0.01])) == 0.0
+
 
 class TestMaxDrawdown:
     """Tests for maximum drawdown computation."""
@@ -164,6 +175,16 @@ class TestMaxDrawdown:
         
         # Negative trend should have larger (more negative) drawdown
         assert mdd_neg <= mdd_pos
+
+    def test_max_drawdown_counts_loss_from_initial_capital(self) -> None:
+        """A loss in the very first period is a drawdown from the starting capital."""
+        assert compute_max_drawdown(pd.Series([-0.10, 0.05])) == pytest.approx(-0.10)
+        assert compute_max_drawdown(pd.Series([-0.10, 0.05, -0.02])) == pytest.approx(-0.10)
+        assert compute_max_drawdown(pd.Series([0.10, -0.20])) == pytest.approx(-0.20)
+
+    def test_max_drawdown_all_gains_is_zero(self) -> None:
+        assert compute_max_drawdown(pd.Series([0.01, 0.02, 0.03])) == 0.0
+        assert compute_max_drawdown(pd.Series(dtype=float)) == 0.0
 
 
 class TestHitRate:
@@ -255,6 +276,58 @@ class TestComputeAllMetrics:
     def test_works_without_benchmark(self, positive_returns: pd.Series) -> None:
         """Should work without benchmark."""
         metrics = compute_all_metrics(positive_returns)
-        
+
         assert "total_return" in metrics
         assert "hit_rate" not in metrics  # Requires benchmark
+
+
+class TestComputeICStats:
+    """compute_ic_stats summarizes IC sequences with iid + Newey-West t-stats."""
+
+    def test_iid_case_matches_scipy(self) -> None:
+        rng = np.random.default_rng(0)
+        ic = rng.normal(loc=0.05, scale=0.10, size=200)
+        stats = compute_ic_stats(ic, horizon_days=1)
+
+        assert stats["n"] == 200
+        assert stats["mean"] == pytest.approx(ic.mean(), rel=1e-8)
+        assert stats["std"] == pytest.approx(ic.std(ddof=1), rel=1e-8)
+
+        # With horizon=1 the NW lag is 0 → NW and iid t-stats should agree to
+        # a small-sample factor of sqrt(n/(n-1)) because NW uses population
+        # variance (÷n) while the iid SE uses sample variance (÷(n-1)).
+        assert stats["t_stat_iid"] == pytest.approx(stats["t_stat_nw"], rel=1e-2)
+        assert stats["ic_stat"] == pytest.approx(
+            stats["mean"] * np.sqrt(200) / stats["std"], rel=1e-8
+        )
+
+    def test_newey_west_inflates_se_when_autocorrelated(self) -> None:
+        # Construct an AR(1) sequence with positive serial correlation; NW SE
+        # should be larger than iid SE, so |t_nw| < |t_iid|.
+        rng = np.random.default_rng(42)
+        n = 500
+        x = np.zeros(n)
+        eps = rng.normal(scale=0.05, size=n)
+        for i in range(1, n):
+            x[i] = 0.6 * x[i - 1] + eps[i]
+        x += 0.02  # shift the mean away from zero
+
+        stats = compute_ic_stats(x, horizon_days=10)
+
+        # NW with lag=9 should recover a smaller |t| than the iid version.
+        assert abs(stats["t_stat_nw"]) < abs(stats["t_stat_iid"])
+        # p_nw is two-sided so correspondingly larger.
+        assert stats["p_value_nw"] > stats["p_value_iid"]
+
+    def test_handles_short_sequences(self) -> None:
+        stats0 = compute_ic_stats(np.array([]), horizon_days=1)
+        assert stats0["n"] == 0
+        assert np.isnan(stats0["mean"])
+        assert np.isnan(stats0["t_stat_iid"])
+
+        stats1 = compute_ic_stats(np.array([0.1]), horizon_days=1)
+        assert stats1["n"] == 1
+        assert stats1["mean"] == 0.1
+        # Cannot compute std/tstat from 1 obs.
+        assert np.isnan(stats1["std"])
+        assert np.isnan(stats1["t_stat_iid"])

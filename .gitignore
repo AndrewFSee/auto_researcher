@@ -51,6 +51,9 @@ env/
 # Testing & Coverage
 # -----------------------------
 .pytest_cache/
+.pytest_tmp/
+test_tmp/
+tests/.scratch/
 .coverage
 .coverage.*
 htmlcov/
@@ -86,8 +89,11 @@ dmypy.json
 # -----------------------------
 # Data Files (Cannot Redistribute)
 # -----------------------------
-data/
-findata/
+# Anchored to the repo root: an unanchored "data/" also matched the
+# src/auto_researcher/data/ *package*, which was therefore never committed.
+/data/
+/findata/
+/scripts/data/
 *.db
 *.sqlite
 *.sqlite3
@@ -104,8 +110,9 @@ price_cache/
 # -----------------------------
 # Results & Outputs
 # -----------------------------
-results/
-logs/
+# Scratch outputs only; curated reports live in docs/results/ and ARE tracked.
+/results/
+/logs/
 *.log
 
 # Backtest output files

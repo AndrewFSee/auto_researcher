@@ -104,7 +104,7 @@ def run_finbert_batch(texts: list[str], batch_size: int = 16) -> list[tuple[floa
     return results
 
 
-def get_forward_returns(tickers: list[str], dates: list, horizons: list[int] = [1, 5, 10, 20]) -> pd.DataFrame:
+def get_forward_returns(tickers: list[str], dates: list, horizons: tuple[int, ...] = (1, 5, 10, 20)) -> pd.DataFrame:
     """Get forward returns for tickers from dates."""
     import yfinance as yf
     

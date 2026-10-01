@@ -118,8 +118,9 @@ def compute_fundamentals_coverage(
         # Default to yearly
         period_func = lambda idx: idx.year
     
-    # Get unique periods
-    periods = sorted(set(period_func(d) for d in df.index))
+    # Period label of every row (computed once; independent of ticker)
+    row_periods = pd.Index([period_func(d) for d in df.index])
+    periods = sorted(set(row_periods))
     
     coverage_data = {}
     
@@ -127,9 +128,7 @@ def compute_fundamentals_coverage(
         ticker_coverage = {}
         
         for period in periods:
-            # Get mask for this period
-            period_mask = df.index.to_series().apply(lambda d: period_func(d) == period)
-            period_df = df.loc[period_mask]
+            period_df = df.loc[row_periods == period]
             
             if len(period_df) == 0:
                 ticker_coverage[period] = np.nan

@@ -1,5 +1,16 @@
 """
-Topic-Based Sentiment Model.
+Topic-Based Sentiment Model (legacy, keyword-based).
+
+.. note::
+
+    This module uses a fixed keyword-to-topic map with hardcoded
+    ``sentiment_multiplier`` values. Phase 2.1 of the audit (see
+    :mod:`auto_researcher.models.bertopic_sentiment` and
+    :mod:`auto_researcher.models.topic_ic_calibrator`) replaces that
+    approach with a per-fold BERTopic cluster + signed IC-calibrated
+    weights. New code should prefer the RollingBERTopic + TopicICCalibrator
+    path; this module is retained for backward compatibility with callers
+    that still rely on keyword-matched topic buckets.
 
 Classifies news into financial topics and computes topic-specific sentiment.
 Research shows certain topics (litigation, M&A, earnings) have stronger

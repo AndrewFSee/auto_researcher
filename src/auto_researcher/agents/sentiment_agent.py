@@ -489,31 +489,42 @@ class SentimentAgent:
         ticker: str,
         max_items: Optional[int] = None,
         lookback_days: Optional[int] = None,
+        as_of_date: Optional[datetime] = None,
+        embargo_days: int = 1,
     ) -> list[NewsItem]:
         """
         Fetch news from our scraped Business Insider database.
-        
-        This database contains years of historical news scraped from 
+
+        This database contains years of historical news scraped from
         Business Insider, providing deep historical context.
-        
+
         Args:
             ticker: Stock ticker symbol.
             max_items: Maximum number of news items to return.
             lookback_days: How many days back to look.
-            
+            as_of_date: Cutoff for backtest mode; when set, ``end_date`` is
+                ``as_of_date - embargo_days`` so post-trade articles can't
+                leak into the feature. Undated rows are dropped. ``None``
+                (default) retains live behavior (end = now).
+            embargo_days: Days to subtract from ``as_of_date`` when setting
+                the cutoff. Matches Phase 0.2's 1-day default.
+
         Returns:
             List of NewsItem objects.
         """
         max_items = max_items or self.config.max_news_items
         lookback_days = lookback_days or self.config.scraped_db_lookback_days
-        
+
         try:
             from ..data.news_scraper import NewsDatabase
-            
+
             db = NewsDatabase()
-            
+
             # Calculate date range
-            end_date = datetime.now()
+            if as_of_date is not None:
+                end_date = as_of_date - timedelta(days=int(embargo_days))
+            else:
+                end_date = datetime.now()
             start_date = end_date - timedelta(days=lookback_days)
             
             # Fetch from database
@@ -534,14 +545,30 @@ class SentimentAgent:
                 try:
                     # Parse published date
                     pub_date_str = art.get('published_date')
+                    published: Optional[datetime] = None
                     if pub_date_str:
                         try:
                             published = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00'))
                         except (ValueError, TypeError):
-                            published = datetime.now()
-                    else:
+                            published = None
+
+                    if published is None:
+                        if as_of_date is not None:
+                            # Can't verify this article pre-dates the embargo
+                            # cut — drop it rather than tag it as "now" and
+                            # leak forward.
+                            continue
                         published = datetime.now()
-                    
+
+                    if as_of_date is not None:
+                        pub = (
+                            published.replace(tzinfo=None)
+                            if published.tzinfo is not None
+                            else published
+                        )
+                        if pub >= end_date:
+                            continue
+
                     news_item = NewsItem(
                         title=art.get('title', ''),
                         source=art.get('source', 'Business Insider'),
@@ -569,32 +596,58 @@ class SentimentAgent:
         self,
         ticker: str,
         max_items: Optional[int] = None,
+        as_of_date: Optional[datetime] = None,
+        embargo_days: int = 1,
     ) -> list[NewsItem]:
         """
         Fetch news from all sources (yfinance + DefeatBeta + scraped DB).
-        
+
         Strategy:
         - yfinance: Most recent news (last 1-2 days) - always fresh
         - Scraped DB: Historical context (up to 30 days) - deep coverage
         - DefeatBeta: Backup historical (3-14 days ago) - updated weekly
-        
+
+        When ``as_of_date`` is set (backtest mode), the yfinance source is
+        skipped entirely — its feed is always "today" and cannot be
+        retroactively filtered. Scraped DB and DefeatBeta are queried with
+        a ``as_of_date - embargo_days`` cut-off and emit only articles
+        strictly before the cut. This matches the Phase 0.2 sentiment fix
+        and is the embargo boundary referenced in Phase 2.3 of the plan.
+
         Returns combined list sorted by date.
         """
         max_items = max_items or self.config.max_news_items
         all_news = []
-        
-        # Get recent news from yfinance (always fresh)
-        yf_news = self.fetch_news(ticker, max_items=max_items // 2)
-        all_news.extend(yf_news)
-        
+
+        # yfinance live feed is always "today"; skip it in backtest mode.
+        if as_of_date is None:
+            yf_news = self.fetch_news(ticker, max_items=max_items // 2)
+            all_news.extend(yf_news)
+
         # Get historical news from our scraped database (deep coverage)
         if self.config.use_scraped_db:
-            scraped_news = self.fetch_scraped_news(ticker, max_items=max_items)
+            scraped_news = self.fetch_scraped_news(
+                ticker,
+                max_items=max_items,
+                as_of_date=as_of_date,
+                embargo_days=embargo_days,
+            )
             all_news.extend(scraped_news)
-        
+
         # Get historical news from DefeatBeta if enabled (backup source)
         if self.config.use_defeatbeta:
             db_news = self.fetch_defeatbeta_news(ticker, max_items=max_items // 2)
+            if as_of_date is not None:
+                cut = as_of_date - timedelta(days=int(embargo_days))
+                cut_is_naive = cut.tzinfo is None
+                db_news = [
+                    item for item in db_news
+                    if (
+                        (item.published.replace(tzinfo=None) if cut_is_naive
+                         and item.published.tzinfo is not None
+                         else item.published) < cut
+                    )
+                ]
             all_news.extend(db_news)
         
         # Deduplicate by title similarity (remove exact matches)
@@ -1006,18 +1059,32 @@ Focus on what matters for investment decisions. Weight high-IC topics more heavi
             method="hybrid",
         )
     
-    def analyze_ticker(self, ticker: str) -> SentimentResult:
+    def analyze_ticker(
+        self,
+        ticker: str,
+        as_of_date: Optional[datetime] = None,
+        embargo_days: int = 1,
+    ) -> SentimentResult:
         """
         Analyze sentiment for a single ticker.
-        
+
         Args:
             ticker: Stock ticker symbol.
-            
+            as_of_date: When set (backtest mode), only articles published
+                strictly before ``as_of_date - embargo_days`` are used. The
+                yfinance live feed is skipped because it cannot be
+                retroactively filtered.
+            embargo_days: Embargo window applied to ``as_of_date``.
+
         Returns:
             SentimentResult with sentiment analysis.
         """
         # Fetch news from all sources (yfinance + DefeatBeta)
-        news_items = self.fetch_all_news(ticker)
+        news_items = self.fetch_all_news(
+            ticker,
+            as_of_date=as_of_date,
+            embargo_days=embargo_days,
+        )
         
         # Add freshly fetched articles to vector store for RAG retrieval
         if self._vectorstore and news_items:

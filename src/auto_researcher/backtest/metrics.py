@@ -98,23 +98,32 @@ def compute_sharpe_ratio(
     periods_per_year: int = 252,
 ) -> float:
     """
-    Compute annualized Sharpe ratio.
+    Compute the annualized Sharpe ratio.
+
+    Uses the standard definition, mean periodic excess return over its
+    standard deviation scaled by ``sqrt(periods_per_year)``. This is the
+    quantity the deflated-Sharpe and Newey-West machinery assume. (An earlier
+    version divided CAGR by volatility, which is not comparable with those
+    statistics.)
 
     Args:
-        returns: Series of returns.
+        returns: Series of periodic returns.
         risk_free_rate: Annualized risk-free rate.
         periods_per_year: Number of periods per year.
 
     Returns:
-        Sharpe ratio.
+        Sharpe ratio (0.0 when undefined).
     """
-    ann_return = compute_annualized_return(returns, periods_per_year)
-    ann_vol = compute_annualized_volatility(returns, periods_per_year)
-    
-    if ann_vol == 0:
+    r = pd.Series(returns, dtype=float).dropna()
+    if len(r) < 2:
         return 0.0
-    
-    return (ann_return - risk_free_rate) / ann_vol
+
+    excess = r - risk_free_rate / periods_per_year
+    std = excess.std()
+    if not np.isfinite(std) or std == 0:
+        return 0.0
+
+    return float(excess.mean() / std * np.sqrt(periods_per_year))
 
 
 def compute_sortino_ratio(
@@ -152,17 +161,26 @@ def compute_max_drawdown(returns: pd.Series) -> float:
     """
     Compute maximum drawdown from a series of returns.
 
+    The running peak starts at the initial capital (1.0), so a loss in the
+    first period counts as drawdown. Previously the first period's value was
+    used as the starting peak, which silently hid any drawdown that began
+    immediately (e.g. returns of -10%, +5% reported a 0% max drawdown).
+
     Args:
         returns: Series of returns.
 
     Returns:
-        Maximum drawdown as a negative decimal (e.g., -0.20 for -20%).
+        Maximum drawdown as a non-positive decimal (e.g., -0.20 for -20%).
     """
-    cumulative = compute_cumulative_returns(returns)
-    running_max = cumulative.expanding().max()
-    drawdown = cumulative / running_max - 1
-    
-    return drawdown.min()
+    r = pd.Series(returns, dtype=float).fillna(0.0)
+    if len(r) == 0:
+        return 0.0
+
+    wealth = np.concatenate([[1.0], (1.0 + r.to_numpy()).cumprod()])
+    running_max = np.maximum.accumulate(wealth)
+    drawdown = wealth / running_max - 1.0
+
+    return float(drawdown.min())
 
 
 def compute_calmar_ratio(
@@ -246,6 +264,85 @@ def compute_ic(
     corr, _ = stats.spearmanr(pred, real)
     
     return corr if not np.isnan(corr) else 0.0
+
+
+def compute_ic_stats(
+    ic_values: np.ndarray | pd.Series,
+    horizon_days: int = 1,
+) -> dict[str, float]:
+    """
+    Summarize a sequence of cross-sectional IC observations.
+
+    When the labels the ICs were computed against have a forward-return
+    horizon greater than one rebalance step, consecutive IC samples share
+    overlapping price windows and are autocorrelated. The plain iid t-stat
+    then over-rejects the null ``mean(IC) == 0``. We report a Newey-West-
+    adjusted t-stat (lag = ``horizon_days - 1``) alongside the iid one so
+    the caller can see both.
+
+    Args:
+        ic_values: Sequence of per-rebalance Spearman ICs.
+        horizon_days: Label horizon (in rebalance steps) used to set the
+            Newey-West lag. ``1`` collapses to the iid case.
+
+    Returns:
+        ``{mean, std, n, pct_positive, t_stat_iid, p_value_iid,
+        t_stat_nw, p_value_nw, ic_stat}`` where ``ic_stat = mean * sqrt(N)
+        / std`` is the classical Lopez de Prado IC statistic.
+    """
+    from math import sqrt
+
+    x = np.asarray(ic_values, dtype=float)
+    x = x[np.isfinite(x)]
+    n = len(x)
+    out = {
+        "mean": float("nan"),
+        "std": float("nan"),
+        "n": float(n),
+        "pct_positive": float("nan"),
+        "t_stat_iid": float("nan"),
+        "p_value_iid": float("nan"),
+        "t_stat_nw": float("nan"),
+        "p_value_nw": float("nan"),
+        "ic_stat": float("nan"),
+    }
+    if n < 2:
+        if n == 1:
+            out["mean"] = float(x[0])
+            out["pct_positive"] = float(x[0] > 0)
+        return out
+
+    mean = float(x.mean())
+    std = float(x.std(ddof=1))
+    out["mean"] = mean
+    out["std"] = std
+    out["pct_positive"] = float((x > 0).mean())
+
+    if std > 0:
+        t_iid = mean / (std / sqrt(n))
+        p_iid = 2.0 * (1.0 - stats.norm.cdf(abs(t_iid)))
+        out["t_stat_iid"] = float(t_iid)
+        out["p_value_iid"] = float(p_iid)
+        out["ic_stat"] = float(mean * sqrt(n) / std)
+
+    # Newey-West long-run variance (Bartlett kernel).
+    u = x - mean
+    gamma0 = float(np.dot(u, u) / n)
+    lrv = gamma0
+    k_max = max(int(horizon_days) - 1, 0)
+    for k in range(1, k_max + 1):
+        if k >= n:
+            break
+        weight = 1.0 - k / (k_max + 1)
+        cov = float(np.dot(u[k:], u[:-k]) / n)
+        lrv += 2.0 * weight * cov
+    lrv = max(lrv, 1e-12)
+    t_nw = mean / sqrt(lrv / n)
+    p_nw = 2.0 * (1.0 - stats.norm.cdf(abs(t_nw)))
+    out["t_stat_nw"] = float(t_nw)
+    out["p_value_nw"] = float(p_nw)
+
+    return out
 
 
 def compute_ir(
@@ -354,17 +451,25 @@ from dataclasses import dataclass, field
 class ICWeightConfig:
     """
     Configuration for IC-weighted ensemble blending.
-    
+
     Attributes:
         window_mom: Rolling window for momentum IC (in periods, e.g., 6 months).
         window_qual: Rolling window for quality IC (in periods, e.g., 12 months).
         min_weight: Minimum weight for each model (floor, default 0.0).
         fallback_weight_mom: Weight for momentum if both ICs are non-positive.
+        label_horizon_periods: Number of rebalance periods in the label horizon.
+            IC indexed at rebal-date D is computed from forward returns over
+            [D, D+h] and therefore is only KNOWN at D+h. To avoid look-ahead,
+            the rolling mean IC used to size weights at date D must exclude
+            any IC realized after D — i.e. we shift the IC series forward by
+            ``label_horizon_periods`` before rolling. Default 1 means IC[D] is
+            used to decide weights for D+1's rebalance, never D's.
     """
     window_mom: int = 6  # 6 months (monthly rebalancing)
     window_qual: int = 12  # 12 months
     min_weight: float = 0.0
     fallback_weight_mom: float = 0.5  # Equal split if no positive IC
+    label_horizon_periods: int = 1
 
 
 def compute_rolling_ic_mean(
@@ -414,12 +519,21 @@ def compute_ic_weights(
     """
     if config is None:
         config = ICWeightConfig()
-    
+
     # Align indices
     common_idx = ic_mom.index.intersection(ic_qual.index)
     ic_mom = ic_mom.loc[common_idx].sort_index()
     ic_qual = ic_qual.loc[common_idx].sort_index()
-    
+
+    # Lag the IC series by the label horizon BEFORE rolling. The IC at date D
+    # is computed from forward returns [D, D+h] and is therefore only known at
+    # D+h — using it to size weights at D is look-ahead. After this shift the
+    # weight at D depends only on IC values labeled ≤ D - horizon.
+    horizon_shift = max(int(config.label_horizon_periods), 0)
+    if horizon_shift:
+        ic_mom = ic_mom.shift(horizon_shift)
+        ic_qual = ic_qual.shift(horizon_shift)
+
     # Compute rolling means
     rolling_mom = compute_rolling_ic_mean(ic_mom, config.window_mom)
     rolling_qual = compute_rolling_ic_mean(ic_qual, config.window_qual)

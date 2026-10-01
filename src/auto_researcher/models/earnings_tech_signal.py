@@ -252,8 +252,6 @@ class DefeatBetaTranscriptClient:
     
     def _ensure_downloaded(self) -> bool:
         """Ensure the parquet file is downloaded to local cache."""
-        import os
-        
         # Already validated cache file
         if DefeatBetaTranscriptClient._cache_file_valid:
             return True

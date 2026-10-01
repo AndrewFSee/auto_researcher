@@ -15,7 +15,7 @@ import numpy as np
 from auto_researcher.models.gbdt_model import GBDTModel
 from auto_researcher.models.regimes import (
     RegimeMode,
-    assign_regime,
+    CausalRegimeAssigner,
     add_regime_feature,
     split_data_by_regime,
     select_model_for_regime,
@@ -59,6 +59,41 @@ from auto_researcher.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _newey_west_mean_tstat(values: np.ndarray, lag: int) -> tuple[float, float]:
+    """
+    Newey-West adjusted t-stat & two-sided p-value for ``values.mean() == 0``.
+
+    ``lag`` should be ~ label horizon - 1 when IC samples overlap (forward
+    returns at consecutive rebalances share observations). When ``lag <= 0``
+    this reduces to the plain iid t-stat.
+    """
+    from math import sqrt
+    from scipy.stats import norm
+
+    x = np.asarray(values, dtype=float)
+    x = x[np.isfinite(x)]
+    n = len(x)
+    if n < 2:
+        return float("nan"), float("nan")
+
+    x_bar = float(x.mean())
+    u = x - x_bar
+    gamma0 = float(np.dot(u, u) / n)
+    lrv = gamma0
+    k_max = max(int(lag), 0)
+    for k in range(1, k_max + 1):
+        if k >= n:
+            break
+        weight = 1.0 - k / (k_max + 1)
+        cov = float(np.dot(u[k:], u[:-k]) / n)
+        lrv += 2.0 * weight * cov
+    lrv = max(lrv, 1e-12)
+
+    t = x_bar / sqrt(lrv / n)
+    p = 2.0 * (1.0 - norm.cdf(abs(t)))
+    return float(t), float(p)
 
 
 @dataclass
@@ -197,7 +232,16 @@ def run_backtest(
     
     if len(rebal_dates) < 2:
         raise ValueError("Not enough rebalance dates after warmup")
-    
+
+    # Build a single causal regime assigner from the benchmark's full price
+    # history. Each `.assign(date)` call internally uses only data strictly
+    # before `date`, so using it here does not leak forward information.
+    regime_assigner: CausalRegimeAssigner | None = (
+        CausalRegimeAssigner(prices[benchmark])
+        if regime_mode != RegimeMode.NONE
+        else None
+    )
+
     logger.info(f"Running backtest with {len(rebal_dates)} rebalance dates")
     
     # Build feature matrix once (will slice as needed)
@@ -278,20 +322,20 @@ def run_backtest(
             
         elif regime_mode == RegimeMode.FEATURE:
             # Add regime_id feature and train single model
-            X_train_regime = add_regime_feature(X_train)
+            X_train_regime = add_regime_feature(X_train, assigner=regime_assigner)
             model.fit(X_train_regime, y_train)
             active_model = model
-            
+
         elif regime_mode == RegimeMode.SPLIT:
             # First, train the global fallback model on all data
             # This ensures we always have a model even for unseen regimes
             model.fit(X_train, y_train)
-            
+
             # Then train separate models per regime
             # Note: We retrain all regime models at each rebal date
             # (could be optimized to only train when new data available)
-            regime_data = split_data_by_regime(X_train, y_train)
-            
+            regime_data = split_data_by_regime(X_train, y_train, assigner=regime_assigner)
+
             for regime_label, (X_regime, y_regime) in regime_data.items():
                 if len(X_regime) < 50:
                     logger.debug(
@@ -299,14 +343,14 @@ def run_backtest(
                         f"{len(X_regime)} samples (using fallback)"
                     )
                     continue
-                
+
                 # Create fresh model for this regime
                 regime_model = GBDTModel(config.model)
                 regime_model.fit(X_regime, y_regime)
                 regime_models[regime_label] = regime_model
-            
+
             # Detect current regime for tracking transitions
-            current_regime = assign_regime(rebal_date)
+            current_regime = regime_assigner(rebal_date) if regime_assigner else "none"
             
             # Log regime transition (once per regime)
             if current_regime != prev_regime:
@@ -326,7 +370,7 @@ def run_backtest(
             
             # Select model for current regime (with global model as fallback)
             active_model = select_model_for_regime(
-                regime_models, rebal_date, fallback_model=model
+                regime_models, rebal_date, fallback_model=model, assigner=regime_assigner
             )
             
             if active_model is None:
@@ -378,7 +422,7 @@ def run_backtest(
         # Add regime feature if using FEATURE mode
         if regime_mode == RegimeMode.FEATURE:
             current_features = get_regime_aware_features(
-                current_features, rebal_date, regime_mode
+                current_features, rebal_date, regime_mode, assigner=regime_assigner
             )
         
         # Rank stocks using the active model (selected during training phase)
@@ -451,9 +495,20 @@ def run_backtest(
         periods_per_year=periods_per_year,
     )
     
-    # Add average IC
+    # IC statistics. Each IC is measured against the return realized between
+    # consecutive rebalance dates, so the samples do not overlap and the
+    # Newey-West lag is 0 (an earlier version used horizon_days - 1, i.e. 62
+    # lags on ~100 monthly observations, which is not a meaningful estimator).
     if ic_history:
-        metrics["average_ic"] = np.mean([ic for _, ic in ic_history])
+        _ic_vals = np.asarray([ic for _, ic in ic_history], dtype=float)
+        _ic_vals = _ic_vals[np.isfinite(_ic_vals)]
+        if len(_ic_vals) > 0:
+            metrics["average_ic"] = float(_ic_vals.mean())
+            metrics["ic_std"] = float(_ic_vals.std(ddof=1)) if len(_ic_vals) > 1 else 0.0
+            metrics["ic_pct_positive"] = float((_ic_vals > 0).mean())
+            _t, _p = _newey_west_mean_tstat(_ic_vals, lag=0)
+            metrics["ic_t_stat"] = _t
+            metrics["ic_p_value"] = _p
     
     # =========================================================================
     # TRANSACTION COST MODELING
@@ -473,38 +528,24 @@ def run_backtest(
         # Shift turnover to next period (turnover at date t affects returns for period t to t+1)
         # Since returns are indexed by next_rebal, we need to align turnover with that
         if len(turnover_raw) > 0 and len(port_ret_series) > 0:
-            # Create mapping: turnover at weights_history[i] applies to return at next_rebal[i]
-            # weights_history dates are rebal dates, returns are indexed by next_rebal
-            # So we need to shift turnover forward by one period
-            turnover_dates = []
-            turnover_values = []
-            for i, (rebal_date, _) in enumerate(weights_history):
-                if i < len(weights_history) - 1:
-                    # Next rebal date is when the return is realized
-                    next_rebal = weights_history[i + 1][0] if i + 1 < len(weights_history) else None
-                    # But returns use the actual next rebalance, which may be different
-                    # Match by index position
-                    pass
-            
-            # Simpler approach: match by position
-            # port_ret_series has len(weights_history) - 1 entries (one per holding period)
-            # turnover_raw has len(weights_history) entries
-            # turnover[i] (for i > 0) is the turnover from period i-1 to i
-            # This turnover applies to the return for period i
-            
-            # Skip first turnover (NaN), align rest with returns
+            # Align by explicit date rather than positional iloc[1:] so we
+            # survive any case where returns or turnover rows get dropped
+            # (e.g. a rebal date with insufficient features). Turnover at
+            # weights_history[i] is paid during the holding period i→i+1,
+            # i.e. it attaches to the return realized at weights_history[i+1].
+            rebal_dates_hist = [d for d, _ in weights_history]
+            turnover_by_return_date: dict[pd.Timestamp, float] = {}
+            for i in range(1, len(rebal_dates_hist)):
+                return_date = rebal_dates_hist[i]
+                turnover_prev = turnover_raw.iloc[i] if i < len(turnover_raw) else np.nan
+                turnover_by_return_date[return_date] = turnover_prev
+
             turnover_aligned = pd.Series(
-                turnover_raw.iloc[1:].values,  # Skip first (NaN)
-                index=port_ret_series.index[:len(turnover_raw) - 1],
-                name="turnover"
+                [turnover_by_return_date.get(d, np.nan) for d in port_ret_series.index],
+                index=port_ret_series.index,
+                name="turnover",
             )
-            
-            # Extend to full return series length if needed
-            if len(turnover_aligned) < len(port_ret_series):
-                missing_dates = port_ret_series.index[len(turnover_aligned):]
-                extra = pd.Series(np.nan, index=missing_dates, name="turnover")
-                turnover_aligned = pd.concat([turnover_aligned, extra])
-            
+
             turnover_series_out = turnover_aligned
             
             # Compute turnover statistics (excluding NaN)
@@ -718,9 +759,20 @@ def run_regime_switch_strategy(
         periods_per_year=12,  # Assumes monthly rebalancing
     )
     
-    # Add average IC
+    # IC statistics. Each IC is measured against the return realized between
+    # consecutive rebalance dates, so the samples do not overlap and the
+    # Newey-West lag is 0 (an earlier version used horizon_days - 1, i.e. 62
+    # lags on ~100 monthly observations, which is not a meaningful estimator).
     if ic_history:
-        metrics["average_ic"] = np.mean([ic for _, ic in ic_history])
+        _ic_vals = np.asarray([ic for _, ic in ic_history], dtype=float)
+        _ic_vals = _ic_vals[np.isfinite(_ic_vals)]
+        if len(_ic_vals) > 0:
+            metrics["average_ic"] = float(_ic_vals.mean())
+            metrics["ic_std"] = float(_ic_vals.std(ddof=1)) if len(_ic_vals) > 1 else 0.0
+            metrics["ic_pct_positive"] = float((_ic_vals > 0).mean())
+            _t, _p = _newey_west_mean_tstat(_ic_vals, lag=0)
+            metrics["ic_t_stat"] = _t
+            metrics["ic_p_value"] = _p
     
     # Add regime-specific info to metrics
     metrics["regime_momentum_count"] = regime_summary[MarketRegime.MOMENTUM.value]
@@ -957,9 +1009,20 @@ def run_ic_weighted_ensemble(
         periods_per_year=12,  # Assumes monthly rebalancing
     )
     
-    # Add average IC
+    # IC statistics. Each IC is measured against the return realized between
+    # consecutive rebalance dates, so the samples do not overlap and the
+    # Newey-West lag is 0 (an earlier version used horizon_days - 1, i.e. 62
+    # lags on ~100 monthly observations, which is not a meaningful estimator).
     if ic_history:
-        metrics["average_ic"] = np.mean([ic for _, ic in ic_history])
+        _ic_vals = np.asarray([ic for _, ic in ic_history], dtype=float)
+        _ic_vals = _ic_vals[np.isfinite(_ic_vals)]
+        if len(_ic_vals) > 0:
+            metrics["average_ic"] = float(_ic_vals.mean())
+            metrics["ic_std"] = float(_ic_vals.std(ddof=1)) if len(_ic_vals) > 1 else 0.0
+            metrics["ic_pct_positive"] = float((_ic_vals > 0).mean())
+            _t, _p = _newey_west_mean_tstat(_ic_vals, lag=0)
+            metrics["ic_t_stat"] = _t
+            metrics["ic_p_value"] = _p
     
     # Add weight summary to metrics
     if weight_history:
@@ -1309,6 +1372,9 @@ def run_enhanced_backtest(
                 tuner_cfg = TunerConfig(
                     n_trials=enhanced_cfg.auto_tune_trials,
                     model_type=enhanced_cfg.model_type if enhanced_cfg.model_type != "rank_ndcg" else "rank_pairwise",
+                    # Purge inner-train labels whose forward-return window
+                    # reaches into the inner-val slice.
+                    purge_days=max(int(horizon_days), 1),
                 )
                 best_params = tune_xgb_hyperparams(X_train, y_train, config=tuner_cfg)
                 # Rebuild model with tuned params
@@ -1553,15 +1619,23 @@ def run_enhanced_backtest(
     metrics["target_type"] = enhanced_cfg.target_mode
     metrics["model_type"] = enhanced_cfg.model_type
     
-    # Add average IC and IC stats
+    # Add IC stats. Newey-West t-stat with lag=horizon-1 corrects for the
+    # autocorrelation induced by overlapping forward-return windows.
     if ic_history:
-        ic_values = [ic for _, ic in ic_history]
-        metrics["average_ic"] = np.mean(ic_values)
-        metrics["ic_std"] = np.std(ic_values)
-        ic_mean = metrics["average_ic"]
-        ic_std = metrics["ic_std"]
-        metrics["ic_ir"] = ic_mean / ic_std if ic_std > 0 else 0.0
-        metrics["ic_positive_rate"] = np.mean([ic > 0 for ic in ic_values])
+        ic_values = np.asarray([ic for _, ic in ic_history], dtype=float)
+        ic_values = ic_values[np.isfinite(ic_values)]
+        if len(ic_values) > 0:
+            ic_mean = float(ic_values.mean())
+            ic_std = float(ic_values.std(ddof=1)) if len(ic_values) > 1 else 0.0
+            metrics["average_ic"] = ic_mean
+            metrics["ic_std"] = ic_std
+            metrics["ic_ir"] = ic_mean / ic_std if ic_std > 0 else 0.0
+            metrics["ic_positive_rate"] = float((ic_values > 0).mean())
+            metrics["ic_pct_positive"] = metrics["ic_positive_rate"]
+            nw_lag = max(int(horizon_days) - 1, 0) if len(ic_values) > 1 else 0
+            t_stat, p_val = _newey_west_mean_tstat(ic_values, lag=nw_lag)
+            metrics["ic_t_stat"] = t_stat
+            metrics["ic_p_value"] = p_val
     
     logger.info(f"Enhanced backtest complete. Sharpe: {metrics.get('sharpe_ratio', 0):.2f}")
     

@@ -109,7 +109,7 @@ def load_price_data(tickers: list, start_date: str, end_date: str) -> pd.DataFra
     return prices
 
 
-def compute_forward_returns(prices: pd.DataFrame, horizons: list = [1, 5, 10]) -> dict:
+def compute_forward_returns(prices: pd.DataFrame, horizons: tuple = (1, 5, 10)) -> dict:
     """Compute forward returns for each horizon."""
     returns = {}
     for h in horizons:

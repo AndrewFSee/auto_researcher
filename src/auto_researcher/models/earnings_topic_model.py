@@ -34,10 +34,65 @@ Usage:
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
 import numpy as np
+
+
+def _parse_article_date(value) -> Optional[datetime]:
+    """Best-effort parse of an article's published_date field.
+
+    Returns ``None`` when the value is absent or unparseable — the caller
+    should drop those rows when enforcing an embargo (a missing timestamp
+    can't be proven to be pre-embargo).
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        if not value:
+            return None
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            # Best-effort: try trimming to the date portion.
+            try:
+                return datetime.fromisoformat(value[:10])
+            except ValueError:
+                return None
+    return None
+
+
+def _filter_embargoed(
+    articles: List[Dict],
+    as_of_date: datetime,
+    embargo_days: int,
+    date_field: str,
+) -> List[Dict]:
+    """Drop articles whose publish date is not strictly before the embargo cut.
+
+    The cut is ``as_of_date - embargo_days``; an article published *at* that
+    cut is also dropped (strict <). Articles with an unparseable or missing
+    timestamp are treated as unsafe and dropped.
+    """
+    cut = as_of_date - timedelta(days=int(embargo_days))
+    # Make naive vs aware comparison cheap: strip tz if the caller supplied a
+    # naive cut (the most common backtest case).
+    cut_is_naive = cut.tzinfo is None
+    kept: List[Dict] = []
+    for art in articles:
+        dt = _parse_article_date(art.get(date_field))
+        if dt is None:
+            continue
+        if cut_is_naive and dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        elif not cut_is_naive and dt.tzinfo is None:
+            dt = dt.replace(tzinfo=cut.tzinfo)
+        if dt < cut:
+            kept.append(art)
+    return kept
 
 from .topic_sentiment import TopicSentimentModel, TopicSentiment
 
@@ -184,16 +239,30 @@ class EarningsTopicModel:
         ticker: str,
         text_field: str = "title",
         finbert_field: Optional[str] = "sentiment_score",
+        as_of_date: Optional[datetime] = None,
+        embargo_days: int = 1,
+        date_field: str = "published_date",
     ) -> EarningsTopicSignal:
         """
         Analyze a batch of news articles for earnings sentiment.
-        
+
         Args:
             articles: List of article dicts
             ticker: Stock ticker
             text_field: Field containing article text
             finbert_field: Field containing pre-computed FinBERT score (optional)
-            
+            as_of_date: If set, drop any article whose ``date_field`` is ``>=
+                as_of_date - embargo_days``. Use this during backtests so a
+                headline published on or after the trading date cannot leak
+                into the feature for that date. ``None`` (default) keeps
+                legacy live-inference behavior: the caller is trusted.
+            embargo_days: Days to subtract from ``as_of_date`` when enforcing
+                the cutoff. ``1`` (default) is the same embargo used in
+                Phase 0.2's ``sentiment.py`` fix.
+            date_field: Article-dict key that holds the publication date.
+                Anything unparseable counts as "unknown" and is dropped when
+                ``as_of_date`` is set.
+
         Returns:
             EarningsTopicSignal with trading signal
         """
@@ -204,6 +273,21 @@ class EarningsTopicModel:
                 earnings_articles=0,
                 topic_sentiment=0.0,
             )
+
+        if as_of_date is not None:
+            articles = _filter_embargoed(
+                articles,
+                as_of_date=as_of_date,
+                embargo_days=embargo_days,
+                date_field=date_field,
+            )
+            if not articles:
+                return EarningsTopicSignal(
+                    ticker=ticker,
+                    total_articles=0,
+                    earnings_articles=0,
+                    topic_sentiment=0.0,
+                )
         
         # Analyze each article
         earnings_sentiments = []

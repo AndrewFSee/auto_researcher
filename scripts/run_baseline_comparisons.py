@@ -343,8 +343,10 @@ def run_random_strategy(
             selected = rng.choice(tradeable, size=top_k, replace=False)
             random_selections[date] = set(selected)
         
-        def get_weights(date: pd.Timestamp, prices_hist: pd.DataFrame) -> dict[str, float]:
-            selected = random_selections.get(date, set())
+        def get_weights(
+            date: pd.Timestamp, prices_hist: pd.DataFrame, _sel: dict = random_selections
+        ) -> dict[str, float]:
+            selected = _sel.get(date, set())
             weight = 1.0 / top_k if len(selected) > 0 else 0.0
             return {t: weight if t in selected else 0.0 for t in tradeable}
         

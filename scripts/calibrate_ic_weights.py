@@ -31,6 +31,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# The agents live in src/; without this, imports inside the calibrators fail and
+# they silently fall back to literature priors.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+
 DATA_DIR = Path(__file__).parent.parent / "data"
 OUTPUT_FILE = DATA_DIR / "agent_ic.json"
 
@@ -116,78 +120,77 @@ def ic_stats(ic_series: pd.Series) -> dict:
 
 def calibrate_earnings_ic(verbose: bool = False) -> dict:
     """
-    Earnings/PEAD agent IC.
+    Earnings/PEAD agent IC from the announcement-dated event study.
 
     Signal: SUE (standardized unexpected earnings)
-    Return: ret20d (post-earnings drift, ~1 month)
-    Source: pead_backtest_results.parquet
+    Return: 20-trading-day market-adjusted drift starting the close after the
+            announcement (``drift_20d``); one cross-sectional IC per quarter.
+    Source: docs/results/pead_event_study.json (``scripts/pead_event_study.py``)
+
+    ``data/pead_backtest_results.parquet`` is NOT used: its event dates are
+    fiscal quarter ends, so its forward returns contain the announcement
+    reaction. It previously produced an earnings IC of 0.107 here.
     """
-    path = DATA_DIR / "pead_backtest_results.parquet"
+    path = DATA_DIR.parent / "docs" / "results" / "pead_event_study.json"
     if not path.exists():
-        logger.warning(f"Missing {path}, skipping earnings calibration")
-        return {"mean_ic": 0.12, "source": "default"}
+        logger.warning(
+            f"Missing {path}; run scripts/pead_event_study.py --offline. "
+            "Earnings agent falls back to the unvalidated prior."
+        )
+        return {"status": "missing", "source": "pead_event_study.json"}
 
-    df = pd.read_parquet(path)
-    logger.info(f"Earnings/PEAD: {len(df)} observations, {df['ticker'].nunique()} tickers")
-
-    # Use SUE as the signal — the core PEAD predictor
-    ret_col = "ret20d" if "ret20d" in df.columns else "ret10d"
-    ic_ser = cross_sectional_ic_series(df, "sue", ret_col, "quarter_date")
-    result = ic_stats(ic_ser)
-    result["signal"] = "sue"
-    result["return_col"] = ret_col
-    result["source"] = "pead_backtest_results.parquet"
-
-    # Also compute pooled IC
-    result["pooled_ic"] = round(pooled_ic(df, "sue", ret_col), 4)
-
+    study = json.loads(path.read_text(encoding="utf-8"))
+    row = study["results"]["drift_20d"]
+    result = {
+        "mean_ic": round(float(row["quarterly_mean_ic"]), 4),
+        "t_stat": round(float(row["quarterly_ic_t"]), 2),
+        "n_periods": int(row["n_quarters"]),
+        "n_events": int(row["n_events"]),
+        "signal": "sue",
+        "return_col": "drift_20d (market-adjusted, from close after announcement)",
+        "source": "pead_event_study.json",
+    }
     if verbose:
-        logger.info(f"  Earnings IC: mean={result['mean_ic']:.4f}, IR={result['ic_ir']:.3f}, "
-                     f"hit={result['hit_rate']:.1%}, n={result['n_periods']}")
+        logger.info(f"  Earnings IC: mean={result['mean_ic']:.4f}, t={result['t_stat']:.2f}, "
+                    f"n={result['n_periods']} quarters")
     return result
 
 
 def calibrate_sentiment_ic(verbose: bool = False) -> dict:
     """
-    Sentiment agent IC.
+    Sentiment agent IC from the point-in-time audit.
 
-    Signal: sentiment_mean (FinBERT news sentiment average)
-    Return: ret5d or ret10d (shorter horizon for news momentum)
-    Source: news_backtest_results.parquet or news_combined_results.parquet
+    Signal: ``sent_30d``, the mean FinBERT score over the last 30 days (the
+            agent's scraped-news window)
+    Return: 21-day forward return, monthly rebalance, entered one day after
+            the article becomes usable
+    Source: docs/results/sentiment_audit.json (``scripts/sentiment_audit.py``)
+
+    The previous source, ``news_combined_results.parquet``, came from a backtest
+    with after-close news leaking into its return windows and signal weights
+    chosen on the full sample.
     """
-    # Prefer the combined results (more data)
-    path = DATA_DIR / "news_combined_results.parquet"
+    path = DATA_DIR.parent / "docs" / "results" / "sentiment_audit.json"
     if not path.exists():
-        path = DATA_DIR / "news_backtest_results.parquet"
-    if not path.exists():
-        logger.warning(f"Missing news backtest data, skipping sentiment calibration")
-        return {"mean_ic": 0.08, "source": "default"}
+        logger.warning(
+            f"Missing {path}; run scripts/sentiment_audit.py. "
+            "Sentiment falls back to the unvalidated prior."
+        )
+        return {"status": "missing", "source": "sentiment_audit.json"}
 
-    df = pd.read_parquet(path)
-    logger.info(f"Sentiment: {len(df)} observations, {df['ticker'].nunique()} tickers")
-
-    # Use sentiment_mean as signal, ret10d as return
-    # News sentiment has a shorter alpha decay than PEAD
-    ret_col = "ret10d" if "ret10d" in df.columns else "ret5d"
-    signal_col = "sentiment_mean"
-
-    ic_ser = cross_sectional_ic_series(df, signal_col, ret_col, "date")
-    result = ic_stats(ic_ser)
-    result["signal"] = signal_col
-    result["return_col"] = ret_col
-    result["source"] = path.name
-
-    # Also try sentiment_momentum if available — captures trend changes
-    if "sentiment_momentum" in df.columns:
-        ic_mom = cross_sectional_ic_series(df, "sentiment_momentum", ret_col, "date")
-        mom_stats = ic_stats(ic_mom)
-        result["sentiment_momentum_ic"] = mom_stats["mean_ic"]
-
-    result["pooled_ic"] = round(pooled_ic(df, signal_col, ret_col), 4)
-
+    audit = json.loads(path.read_text(encoding="utf-8"))
+    row = audit["results"]["monthly (21d)"]["sent_30d"]
+    result = {
+        "mean_ic": round(float(row["ic_mean"]), 4),
+        "t_stat": round(float(row["ic_t_nw"]), 2),
+        "n_periods": int(row["n_periods"]),
+        "signal": "sent_30d",
+        "return_col": "21d forward return (point-in-time)",
+        "source": "sentiment_audit.json",
+    }
     if verbose:
-        logger.info(f"  Sentiment IC: mean={result['mean_ic']:.4f}, IR={result['ic_ir']:.3f}, "
-                     f"hit={result['hit_rate']:.1%}, n={result['n_periods']}")
+        logger.info(f"  Sentiment IC: mean={result['mean_ic']:+.4f}, t={result['t_stat']:+.2f}, "
+                    f"n={result['n_periods']}")
     return result
 
 
@@ -556,26 +559,38 @@ def calibrate_earnings_call_qual_ic(verbose: bool = False) -> dict:
 
 def calibrate_ml_ic(verbose: bool = False) -> dict:
     """
-    ML (XGBoost) model IC.
+    ML screening model IC from the purged walk-forward evaluation.
 
-    This is already computed during training in recommend.py as historical_ic.
-    We just record the default for reference.
+    Source: docs/results/walkforward.json (``scripts/ml_walkforward_backtest.py``),
+    the ``screening`` model: the live recipe evaluated with purged training
+    windows and next-close execution, one IC per monthly rebalance.
 
-    The actual IC is set dynamically each run by the ML training process.
+    The previous value here was a hardcoded 0.15 that nothing had measured.
     """
+    path = DATA_DIR.parent / "docs" / "results" / "walkforward.json"
+    if not path.exists():
+        logger.warning(
+            f"Missing {path}; run scripts/ml_walkforward_backtest.py --offline. "
+            "ML falls back to the unvalidated prior."
+        )
+        return {"status": "missing", "source": "walkforward.json"}
+
+    report = json.loads(path.read_text(encoding="utf-8"))
+    models = report["sections"]["Models and baselines"]
+    row = models.get("screening") or next(iter(models.values()))
     result = {
-        "mean_ic": 0.15,
-        "source": "computed_at_runtime",
-        "note": "ML IC is computed OOS during each training run; this is the fallback default",
+        "mean_ic": round(float(row["ic_mean"]), 4),
+        "t_stat": round(float(row["ic_t_nw"]), 2),
+        "n_periods": int(row["n_periods"]),
+        "signal": "screening model score",
+        "return_col": "21d forward return (next-close execution)",
+        "source": "walkforward.json",
     }
     if verbose:
-        logger.info(f"  ML IC: {result['mean_ic']:.4f} (computed at runtime)")
+        logger.info(f"  ML IC: {result['mean_ic']:+.4f} (t={result['t_stat']:+.2f}, "
+                    f"n={result['n_periods']} periods)")
     return result
 
-
-# =============================================================================
-# MAIN CALIBRATION RUNNER
-# =============================================================================
 
 def run_calibration(verbose: bool = False) -> dict:
     """Run IC calibration for all agents and return results dict."""
@@ -585,7 +600,7 @@ def run_calibration(verbose: bool = False) -> dict:
 
     results = {}
 
-    # 1. ML (runtime IC, just record default)
+    # 1. ML (purged walk-forward IC of the screening model)
     logger.info("\n[1/9] ML Model...")
     results["ml"] = calibrate_ml_ic(verbose)
 
@@ -631,15 +646,20 @@ def run_calibration(verbose: bool = False) -> dict:
     # Build simplified weight dict for the pipeline
     ic_weights = {}
     for agent, stats_dict in results.items():
-        ic = stats_dict.get("mean_ic", 0.0)
-        ir = stats_dict.get("ic_ir", 0.0)
+        ic = stats_dict.get("mean_ic", float("nan"))
+        ir = stats_dict.get("ic_ir", float("nan"))
         hit = stats_dict.get("hit_rate", 0.0)
         n = stats_dict.get("n_periods", stats_dict.get("n_obs", 0))
         src = stats_dict.get("source", "unknown")
         logger.info(f"  {agent:<13} {ic:>8.4f} {ir:>8.3f} {hit:>7.1%} {n:>6} {src}")
-        ic_weights[agent] = abs(ic)  # Use absolute IC for weighting
 
-    results["_ic_weights"] = ic_weights
+    # Weights the pipeline will use: signed, sample-size-shrunk ICs with a
+    # small prior for unvalidated agents (auto_researcher.composite).
+    sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+    from auto_researcher.composite import composite_weights, parse_agent_evidence
+
+    ic_weights, _, _ = composite_weights(parse_agent_evidence(results))
+    results["_ic_weights"] = {k: round(v, 4) for k, v in ic_weights.items()}
     results["_calibrated_at"] = pd.Timestamp.now().isoformat()
     results["_horizon"] = HORIZON
 

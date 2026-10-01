@@ -67,6 +67,18 @@ class FeaturePipelineConfig:
     use_core_features_only: bool = False
     core_features: tuple[str, ...] | None = None
     tech_only_tickers: tuple[str, ...] = ()
+    # Topic-weighted sentiment — opt-in because it requires a
+    # per-backtest calibration cutoff + realized forward returns.
+    use_topic_weighted_sentiment: bool = False
+    topic_weighted_forward_returns: pd.DataFrame | None = None
+    topic_weighted_cutoff: pd.Timestamp | str | None = None
+    # Phase 5: public alt-data sleeves (Wikipedia pageviews, EDGAR 8-K stream,
+    # Google Trends, Reddit). Each adapter must implement ``.fetch(tickers,
+    # start, end) -> Series[(date, ticker)]``. Default empty tuple is a
+    # no-op, so existing callers get identical behavior. Signals are
+    # cross-sectionally z-scored before joining, matching the sentiment path.
+    altdata_adapters: tuple = ()
+    altdata_normalize: str = "zscore_xsec"
 
 
 def _convert_feature_config(config: FeatureConfig) -> FeaturePipelineConfig:
@@ -260,10 +272,39 @@ def build_feature_matrix(
             tickers = prices.columns.tolist()
         start = prices.index[0].strftime("%Y-%m-%d")
         end = prices.index[-1].strftime("%Y-%m-%d")
-        sent_features = compute_all_sentiment_features(tickers, start, end)
+        sent_features = compute_all_sentiment_features(
+            tickers,
+            start,
+            end,
+            use_topic_weighted=pipeline_config.use_topic_weighted_sentiment,
+            topic_weighted_forward_returns=(
+                pipeline_config.topic_weighted_forward_returns
+            ),
+            topic_weighted_cutoff=pipeline_config.topic_weighted_cutoff,
+        )
         if not sent_features.empty:
             all_features.append(sent_features)
             logger.info(f"Computed {len(sent_features.columns)} sentiment features")
+
+    # -------------------------------------------------------------------------
+    # Alt-data sleeves (Phase 5)
+    # -------------------------------------------------------------------------
+    if pipeline_config.altdata_adapters:
+        if isinstance(prices.columns, pd.MultiIndex):
+            tickers = prices.columns.get_level_values(-1).unique().tolist()
+        else:
+            tickers = prices.columns.tolist()
+        altdata_features = _build_altdata_features(
+            pipeline_config.altdata_adapters,
+            tickers=tickers,
+            price_index=prices.index,
+            normalize_mode=pipeline_config.altdata_normalize,
+        )
+        if not altdata_features.empty:
+            all_features.append(altdata_features)
+            logger.info(
+                f"Computed {len(altdata_features.columns)} alt-data features"
+            )
 
     # -------------------------------------------------------------------------
     # Combine all features
@@ -357,6 +398,98 @@ def _filter_to_core_features(
         return features[found_features]
 
 
+def _build_altdata_features(
+    adapters: tuple,
+    tickers: list[str],
+    price_index: pd.DatetimeIndex,
+    normalize_mode: str = "zscore_xsec",
+) -> pd.DataFrame:
+    """Fetch each alt-data adapter and return a price-aligned feature matrix.
+
+    Phase 5 integration — each adapter is expected to implement the
+    :class:`auto_researcher.data.altdata.base.AltDataAdapter` protocol:
+    ``fetch(tickers, start, end) -> pd.Series[(date, ticker)]``. The raw
+    series is cross-sectionally z-scored, unstacked to wide form, and
+    forward-filled onto the price calendar so the output drops cleanly
+    into :func:`_merge_feature_matrices`.
+
+    Any adapter that raises is logged and skipped — a flaky Wikipedia
+    request or a Reddit 429 shouldn't poison the whole feature matrix.
+    Returns an empty DataFrame when no adapter produced usable data.
+    """
+    from auto_researcher.data.altdata.base import zscore_panel
+
+    if not adapters:
+        return pd.DataFrame(index=price_index)
+    if len(price_index) == 0:
+        return pd.DataFrame(
+            columns=pd.MultiIndex.from_tuples([], names=["ticker", "feature"])
+        )
+
+    start = price_index[0].strftime("%Y-%m-%d")
+    end = price_index[-1].strftime("%Y-%m-%d")
+
+    wide_per_adapter: list[pd.DataFrame] = []
+    for adapter in adapters:
+        name = getattr(adapter, "name", adapter.__class__.__name__)
+        try:
+            raw = adapter.fetch(tickers, start, end)
+        except Exception as exc:
+            logger.warning(
+                "altdata adapter %r raised during fetch (%s) — skipping", name, exc
+            )
+            continue
+
+        if raw is None or raw.empty:
+            logger.debug("altdata adapter %r returned empty", name)
+            continue
+
+        try:
+            z = zscore_panel(raw, mode=normalize_mode)
+        except Exception as exc:
+            logger.warning(
+                "altdata adapter %r z-score failed (%s) — skipping", name, exc
+            )
+            continue
+
+        # (date, ticker) Series -> date x ticker wide DataFrame.
+        try:
+            wide = z.unstack(level="ticker")
+        except Exception as exc:
+            logger.warning(
+                "altdata adapter %r unstack failed (%s) — skipping", name, exc
+            )
+            continue
+
+        # Align to the price calendar; adapters run on their own cadence
+        # (Wikipedia daily, 8-K episodic, Reddit hourly). Forward-fill so
+        # the score at price_date is the most recently published value.
+        wide = wide.reindex(price_index).ffill()
+        if wide.isna().all().all():
+            logger.debug(
+                "altdata adapter %r produced only NaN after alignment", name
+            )
+            continue
+
+        # Make the feature name the adapter's name; the caller gets
+        # ``(ticker, altdata_<name>)`` in the MultiIndex column output.
+        wide.columns = pd.MultiIndex.from_product(
+            [wide.columns, [f"altdata_{name}"]],
+            names=["ticker", "feature"],
+        )
+        wide_per_adapter.append(wide)
+
+    if not wide_per_adapter:
+        return pd.DataFrame(
+            columns=pd.MultiIndex.from_tuples([], names=["ticker", "feature"])
+        )
+
+    # Outer-concat on columns so tickers missing from one adapter still show
+    # up (as NaN) rather than silently dropping from the panel.
+    merged = pd.concat(wide_per_adapter, axis=1)
+    return merged.sort_index(axis=1)
+
+
 def _prefix_features(
     features: pd.DataFrame,
     prefix: str,
@@ -379,29 +512,57 @@ def _prefix_features(
     return features
 
 
+_DEFAULT_FUNDAMENTALS_FILING_LAG_DAYS = 45
+
+
 def _align_fundamentals_to_prices(
     fund_factors: pd.DataFrame,
     prices: pd.DataFrame,
+    filing_lag_days: int = _DEFAULT_FUNDAMENTALS_FILING_LAG_DAYS,
 ) -> pd.DataFrame:
     """
-    Align fundamental factors to price dates.
+    Align fundamental factors to price dates with a point-in-time filing lag.
 
-    Fundamentals are typically updated monthly/quarterly, so we forward-fill
-    to daily frequency to align with price data.
+    Fundamentals are typically updated quarterly, and the values reported by
+    most providers (yfinance, FMP, finagg) are indexed by *fiscal-quarter-end*,
+    not the *filing date*. A 10-K filed on 2023-03-15 reports numbers for
+    2022-12-31. If we reindex the 2022-12-31 timestamp straight onto 2023-01-01
+    price dates we leak information that wasn't public yet.
+
+    This function takes a per-ticker series indexed by whatever timestamp the
+    upstream provider gave us and adds ``filing_lag_days`` before reindexing
+    onto price dates. An explicit ``filing_date`` column on ``fund_factors``
+    (if present) takes precedence — we use that verbatim rather than applying
+    a blanket lag.
 
     Args:
-        fund_factors: DataFrame with MultiIndex (date, ticker) and factor columns.
+        fund_factors: DataFrame with MultiIndex (date, ticker). ``date`` is
+            interpreted as fiscal-quarter-end unless a ``filing_date`` column
+            is provided, in which case ``filing_date`` is used as-of.
         prices: Price DataFrame with DatetimeIndex and ticker columns.
+        filing_lag_days: Calendar-day lag to add to fiscal-period timestamps
+            when no explicit ``filing_date`` column exists. Default 45 — a
+            conservative proxy for the 10-Q deadline.
 
     Returns:
-        DataFrame with MultiIndex columns (ticker, feature), aligned to prices.index.
+        DataFrame with MultiIndex columns (ticker, feature), aligned to
+        prices.index. All values at time t use only data publicly known at
+        t (filing date + embargo ≤ t).
+
+    Raises:
+        AssertionError: If the reindexed data is discovered to extend past
+            the price index without at least a filing-lag-sized gap.
     """
     tickers = prices.columns.tolist()
     price_dates = prices.index
+    lag_offset = pd.Timedelta(days=max(int(filing_lag_days), 0))
+    has_explicit_filing_date = "filing_date" in fund_factors.columns
 
     # Build a (date, ticker) -> factor mapping
     # For each ticker, create a Series for each factor and reindex to price dates
     aligned_data = {}
+
+    factor_columns = [c for c in fund_factors.columns if c != "filing_date"]
 
     for ticker in tickers:
         if ticker not in fund_factors.index.get_level_values("ticker"):
@@ -410,10 +571,29 @@ def _align_fundamentals_to_prices(
 
         ticker_data = fund_factors.xs(ticker, level="ticker")
 
-        for factor in fund_factors.columns:
-            factor_series = ticker_data[factor]
+        # Determine the as-of index for this ticker.
+        if has_explicit_filing_date:
+            filing_dates = pd.to_datetime(ticker_data["filing_date"])
+            if filing_dates.isna().any():
+                # Fall back to fiscal-period index + lag where filing_date is missing.
+                fallback_dates = pd.to_datetime(ticker_data.index) + lag_offset
+                filing_dates = filing_dates.where(~filing_dates.isna(), fallback_dates)
+            asof_index = pd.DatetimeIndex(filing_dates.values)
+        else:
+            asof_index = pd.DatetimeIndex(pd.to_datetime(ticker_data.index) + lag_offset)
 
-            # Reindex to price dates with forward-fill
+        lagged_ticker_data = ticker_data.copy()
+        lagged_ticker_data.index = asof_index
+        # If the same ticker reports multiple statements with the same as-of
+        # date (rare but possible after lag collisions), keep the most recent.
+        lagged_ticker_data = lagged_ticker_data[~lagged_ticker_data.index.duplicated(keep="last")]
+        lagged_ticker_data = lagged_ticker_data.sort_index()
+
+        for factor in factor_columns:
+            factor_series = lagged_ticker_data[factor]
+
+            # Reindex to price dates with forward-fill — now causal because
+            # asof_index is strictly the publication date, not fiscal end.
             aligned_series = factor_series.reindex(price_dates, method="ffill")
             aligned_data[(ticker, factor)] = aligned_series
 

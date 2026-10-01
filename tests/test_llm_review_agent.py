@@ -126,7 +126,11 @@ def mock_litellm():
         "- Key risk: Multiple compression if earnings growth decelerates.\n"
         "- Signal confidence: HIGH confidence in the signal."
     )
-    with patch("auto_researcher.agents.llm_review_agent.litellm") as mock_ll:
+    # Patch the availability flag too, so these logic tests run whether or not
+    # the optional litellm dependency is installed.
+    with patch("auto_researcher.agents.llm_review_agent.litellm") as mock_ll, patch(
+        "auto_researcher.agents.llm_review_agent.HAS_LITELLM", True
+    ):
         mock_ll.completion.return_value = mock_response
         yield mock_ll
 
@@ -395,7 +399,11 @@ class TestFullReview:
 
 class TestPromptBuilding:
     def test_builds_valid_prompt(self, mock_litellm):
-        agent = LLMReviewAgent(config=LLMReviewConfig(reflexion_rounds=0))
+        # mask_tickers=False keeps the literal ticker/company in the prompt —
+        # this path is exercised when leakage-reduction masking is opt-out.
+        agent = LLMReviewAgent(
+            config=LLMReviewConfig(reflexion_rounds=0, mask_tickers=False)
+        )
         stock = _make_stock(
             "AAPL",
             composite=0.8,
@@ -418,13 +426,35 @@ class TestPromptBuilding:
         assert "Low debt-to-equity" in prompt
 
     def test_handles_missing_rationales(self, mock_litellm):
-        agent = LLMReviewAgent(config=LLMReviewConfig(reflexion_rounds=0))
+        agent = LLMReviewAgent(
+            config=LLMReviewConfig(reflexion_rounds=0, mask_tickers=False)
+        )
         stock = _make_stock("XYZ", composite=0.3, signal="buy")
         stock["agent_rationales"] = {}
         prompt = agent._build_review_prompt(stock)
 
         assert "XYZ" in prompt
         assert "No detailed evidence" in prompt
+
+    def test_masks_ticker_by_default(self, mock_litellm):
+        """With the default mask_tickers=True, ticker/company must be scrubbed."""
+        agent = LLMReviewAgent(config=LLMReviewConfig(reflexion_rounds=0))
+        stock = _make_stock(
+            "AAPL",
+            composite=0.8,
+            signal="buy",
+            sector="Technology",
+        )
+        stock["company_name"] = "Apple Inc."
+        stock["agent_rationales"]["fundamental"] = {
+            "evidence": ["AAPL reported strong margins"],
+        }
+        prompt = agent._build_review_prompt(stock)
+
+        assert "AAPL" not in prompt, "ticker leaked past the mask"
+        assert "Apple Inc." not in prompt, "company name leaked past the mask"
+        assert "Technology" in prompt  # sector is a safe, coarse hint
+        assert "REDACTED" in prompt
 
 
 # ---------------------------------------------------------------------------

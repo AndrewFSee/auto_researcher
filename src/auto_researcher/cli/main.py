@@ -395,6 +395,9 @@ def main() -> int:
     Returns:
         Exit code (0 for success, non-zero for failure).
     """
+    from auto_researcher.console import use_utf8_output
+
+    use_utf8_output()
     args = parse_args()
     
     # Set logging level

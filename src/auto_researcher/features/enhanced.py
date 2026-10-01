@@ -11,6 +11,7 @@ This module provides additional features for more robust stock ranking:
 """
 
 import logging
+import warnings
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -144,15 +145,16 @@ def compute_rolling_beta(
     """
     if min_periods is None:
         min_periods = max(window // 2, 20)
-    
+
     betas = pd.DataFrame(index=stock_returns.index, columns=stock_returns.columns, dtype=float)
-    
-    # Align benchmark to stock returns index
-    benchmark_aligned = benchmark_returns.reindex(stock_returns.index)
-    
-    for ticker in stock_returns.columns:
-        stock_ret = stock_returns[ticker]
-        
+
+    # Align benchmark to stock returns index then lag by 1 bar (causal beta).
+    benchmark_aligned = benchmark_returns.reindex(stock_returns.index).shift(1)
+    stock_lagged = stock_returns.shift(1)
+
+    for ticker in stock_lagged.columns:
+        stock_ret = stock_lagged[ticker]
+
         # Rolling covariance and variance
         cov = stock_ret.rolling(window=window, min_periods=min_periods).cov(benchmark_aligned)
         var = benchmark_aligned.rolling(window=window, min_periods=min_periods).var()
@@ -231,9 +233,12 @@ def compute_residual_momentum_features(
     
     features = {}
     
+    # Causal: shift residuals by 1 bar before the rolling sum so the feature
+    # at time t does not include residual return on day t itself.
+    lagged_residuals = residuals.shift(1)
     for window in windows:
-        # Cumulative residual return over window
-        cum_resid = residuals.rolling(window=window).sum()
+        # Cumulative residual return over window [t-window, t-1]
+        cum_resid = lagged_residuals.rolling(window=window).sum()
         for ticker in cum_resid.columns:
             features[(ticker, f"tech_resid_mom_{window}")] = cum_resid[ticker]
     
@@ -284,9 +289,11 @@ def compute_idio_volatility_features(
     
     features = {}
     
+    # Causal: shift residuals by 1 bar so vol at t excludes day-t residual.
+    lagged_residuals = residuals.shift(1)
     for window in windows:
-        # Rolling std of residuals
-        vol = residuals.rolling(window=window).std()
+        # Rolling std of residuals over [t-window, t-1]
+        vol = lagged_residuals.rolling(window=window).std()
         if annualize:
             vol = vol * np.sqrt(252)
         
@@ -318,8 +325,10 @@ def compute_trend_health_features(
     if short_window >= long_window:
         raise ValueError("short_window must be less than long_window")
 
-    ma_short = prices.rolling(window=short_window, min_periods=short_window // 2).mean()
-    ma_long = prices.rolling(window=long_window, min_periods=long_window // 2).mean()
+    # Causal: lag prices one bar so the MA ratio at t uses [t-window, t-1].
+    lagged_prices = prices.shift(1)
+    ma_short = lagged_prices.rolling(window=short_window, min_periods=short_window // 2).mean()
+    ma_long = lagged_prices.rolling(window=long_window, min_periods=long_window // 2).mean()
     ma_ratio = (ma_short / ma_long) - 1
 
     features = {}
@@ -335,6 +344,31 @@ def compute_trend_health_features(
 # =============================================================================
 # ROBUST DISPERSION METRICS (MAD)
 # =============================================================================
+
+def _rolling_mad(frame: pd.DataFrame, window: int) -> pd.DataFrame:
+    """
+    Rolling median absolute deviation, vectorized over time and columns.
+
+    Matches ``rolling(window).apply(median(|x - median(x)|))`` exactly: the
+    result at row t uses rows ``t - window + 1 .. t`` and, like pandas'
+    default ``min_periods=window``, is NaN unless every value in the window
+    is present.
+    """
+    from numpy.lib.stride_tricks import sliding_window_view
+
+    values = frame.to_numpy(dtype=float)
+    out = np.full(values.shape, np.nan)
+    if len(values) >= window:
+        windows = sliding_window_view(values, window, axis=0)  # (T-w+1, N, w)
+        counts = np.sum(~np.isnan(windows), axis=2)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN windows
+            med = np.nanmedian(windows, axis=2)
+            mad = np.nanmedian(np.abs(windows - med[..., None]), axis=2)
+        mad[counts < window] = np.nan
+        out[window - 1 :] = mad
+    return pd.DataFrame(out, index=frame.index, columns=frame.columns)
+
 
 def compute_mad_features(
     prices: pd.DataFrame,
@@ -359,22 +393,15 @@ def compute_mad_features(
     
     features = {}
     
-    def rolling_mad(x):
-        """Compute MAD for a rolling window."""
-        if len(x) < window // 2:
-            return np.nan
-        median = np.nanmedian(x)
-        return np.nanmedian(np.abs(x - median))
-    
-    for ticker in returns.columns:
-        # MAD of returns
-        mad_ret = returns[ticker].rolling(window=window).apply(rolling_mad, raw=True)
-        features[(ticker, f"tech_mad_ret_{window}")] = mad_ret
-        
+    # Causal: lag returns by 1 bar so MAD at t excludes day-t return.
+    lagged_returns = returns.shift(1)
+    vol_21 = lagged_returns.rolling(window=21).std()
+    mad_ret = _rolling_mad(lagged_returns, window)
+    mad_vol = _rolling_mad(vol_21, window)
+    for ticker in lagged_returns.columns:
+        features[(ticker, f"tech_mad_ret_{window}")] = mad_ret[ticker]
         # MAD of rolling volatility (more stable measure of vol dispersion)
-        vol_21 = returns[ticker].rolling(window=21).std()
-        mad_vol = vol_21.rolling(window=window).apply(rolling_mad, raw=True)
-        features[(ticker, f"tech_mad_vol_{window}")] = mad_vol
+        features[(ticker, f"tech_mad_vol_{window}")] = mad_vol[ticker]
     
     result = pd.DataFrame(features)
     result.columns = pd.MultiIndex.from_tuples(result.columns, names=["ticker", "feature"])
@@ -617,28 +644,16 @@ def _normalize_global(feat_data: pd.DataFrame, robust: bool) -> pd.DataFrame:
     For each row (date), compute z-scores across all tickers.
     """
     if robust:
-        # Robust: median and MAD
-        center = feat_data.median(axis=1)
-
-        def _safe_mad(row):
-            """MAD with small-sample guard (scipy needs >= 3 values)."""
-            vals = row.dropna()
-            if len(vals) < 3:
-                return np.nan
-            return stats.median_abs_deviation(vals, nan_policy='omit')
-
-        import warnings
+        # Robust: median and MAD (vectorized across dates; needs >= 3 names)
+        values = feat_data.to_numpy(dtype=float)
         with warnings.catch_warnings():
-            warnings.filterwarnings('ignore', category=UserWarning, message='.*small.*')
-            # Also catch scipy's SmallSampleWarning if it exists
-            try:
-                from scipy.stats import SmallSampleWarning
-                warnings.filterwarnings('ignore', category=SmallSampleWarning)
-            except ImportError:
-                pass
-            scale = feat_data.apply(_safe_mad, axis=1)
+            warnings.simplefilter("ignore", category=RuntimeWarning)  # all-NaN rows
+            med = np.nanmedian(values, axis=1)
+            mad = np.nanmedian(np.abs(values - med[:, None]), axis=1)
+        mad[np.sum(~np.isnan(values), axis=1) < 3] = np.nan
+        center = pd.Series(med, index=feat_data.index)
         # Scale MAD to be consistent with std (MAD * 1.4826 ≈ std for normal dist)
-        scale = scale * 1.4826
+        scale = pd.Series(mad, index=feat_data.index) * 1.4826
     else:
         # Standard: mean and std
         center = feat_data.mean(axis=1)

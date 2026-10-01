@@ -3,6 +3,16 @@ Technical feature engineering.
 
 This module provides functions to compute technical indicators like
 momentum, volatility, and other price-based features.
+
+Causality invariant
+-------------------
+All rolling-window features are *causal by default*: the value at time t uses
+only data strictly before t (i.e. through t-1). This is enforced by a uniform
+``lag: int = 1`` keyword on every primitive, which shifts the input series by
+``lag`` bars before any rolling op. Callers who want "as-of-close-of-t" values
+(e.g. for intraday research with pre-close execution) can pass ``lag=0`` — but
+that breaks the backtest embargo and should never be used in training or
+scoring pipelines.
 """
 
 import pandas as pd
@@ -48,6 +58,7 @@ def compute_momentum(
     returns: pd.DataFrame,
     window: int,
     skip_recent: int = 1,
+    lag: int = 0,
 ) -> pd.DataFrame:
     """
     Compute momentum as cumulative return over a lookback window.
@@ -59,6 +70,10 @@ def compute_momentum(
         returns: Daily returns DataFrame with tickers as columns.
         window: Lookback window in trading days.
         skip_recent: Number of recent days to skip (default 1 for reversal).
+            With skip_recent >= 1 the window is already causal at time t.
+        lag: Extra bars to shift the input by *before* the rolling op. The
+            default of 0 together with skip_recent=1 already excludes day t;
+            use lag > 0 only if additional embargo is wanted.
 
     Returns:
         Momentum scores with same structure as input.
@@ -71,15 +86,20 @@ def compute_momentum(
         >>> mom.shape == returns.shape
         True
     """
+    if lag:
+        returns = returns.shift(lag)
+
     # Compute cumulative return over window
-    # Skip most recent 'skip_recent' days to avoid reversal effect
+    # Skip most recent 'skip_recent' days to avoid reversal effect (and
+    # enforce causality — the window at t covers [t-window+1, t-skip_recent]).
     if skip_recent > 0:
         shifted_cumret = (1 + returns).rolling(window=window).apply(
             lambda x: x[:-skip_recent].prod() - 1 if len(x) > skip_recent else np.nan,
             raw=False,
         )
     else:
-        shifted_cumret = (1 + returns).rolling(window=window).apply(
+        # skip_recent=0 => would include day t. Force one-bar shift to keep causal.
+        shifted_cumret = (1 + returns.shift(1)).rolling(window=window).apply(
             lambda x: x.prod() - 1,
             raw=False,
         )
@@ -87,34 +107,44 @@ def compute_momentum(
     return shifted_cumret
 
 
-def compute_momentum_simple(returns: pd.DataFrame, window: int) -> pd.DataFrame:
+def compute_momentum_simple(
+    returns: pd.DataFrame,
+    window: int,
+    lag: int = 1,
+) -> pd.DataFrame:
     """
     Compute simple momentum as rolling sum of returns.
 
-    This is a faster approximation suitable for short windows.
+    This is a faster approximation suitable for short windows. Causal by default
+    (lag=1) — the window at t covers [t-window, t-1], excluding day t's return.
 
     Args:
         returns: Daily returns DataFrame.
         window: Lookback window in trading days.
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         Rolling sum of returns.
     """
-    return returns.rolling(window=window).sum()
+    return returns.shift(lag).rolling(window=window).sum()
 
 
 def compute_volatility(
     returns: pd.DataFrame,
     window: int,
     annualize: bool = True,
+    lag: int = 1,
 ) -> pd.DataFrame:
     """
     Compute rolling volatility of returns.
+
+    Causal by default (lag=1).
 
     Args:
         returns: Daily returns DataFrame with tickers as columns.
         window: Lookback window in trading days.
         annualize: If True, annualize volatility (multiply by sqrt(252)).
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         Volatility with same structure as input.
@@ -126,7 +156,7 @@ def compute_volatility(
         >>> vol.shape == returns.shape
         True
     """
-    vol = returns.rolling(window=window).std()
+    vol = returns.shift(lag).rolling(window=window).std()
     if annualize:
         vol = vol * np.sqrt(252)
     return vol
@@ -136,24 +166,29 @@ def compute_sharpe(
     returns: pd.DataFrame,
     window: int,
     risk_free_rate: float = 0.0,
+    lag: int = 1,
 ) -> pd.DataFrame:
     """
     Compute rolling Sharpe ratio.
+
+    Causal by default (lag=1).
 
     Args:
         returns: Daily returns DataFrame.
         window: Lookback window in trading days.
         risk_free_rate: Annualized risk-free rate.
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         Rolling Sharpe ratio.
     """
     daily_rf = risk_free_rate / 252
-    excess_returns = returns - daily_rf
-    
+    lagged_returns = returns.shift(lag)
+    excess_returns = lagged_returns - daily_rf
+
     mean_return = excess_returns.rolling(window=window).mean() * 252
-    volatility = returns.rolling(window=window).std() * np.sqrt(252)
-    
+    volatility = lagged_returns.rolling(window=window).std() * np.sqrt(252)
+
     return mean_return / volatility.replace(0, np.nan)
 
 
@@ -173,28 +208,29 @@ def compute_max_drawdown(prices: pd.DataFrame, window: int) -> pd.DataFrame:
     return drawdown.rolling(window=window).min()
 
 
-def compute_rsi(prices: pd.DataFrame, window: int = 14) -> pd.DataFrame:
+def compute_rsi(prices: pd.DataFrame, window: int = 14, lag: int = 1) -> pd.DataFrame:
     """
-    Compute Relative Strength Index (RSI).
+    Compute Relative Strength Index (RSI). Causal by default (lag=1).
 
     Args:
         prices: Price DataFrame with tickers as columns.
         window: RSI period (default 14).
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         RSI values between 0 and 100.
     """
-    delta = prices.diff()
-    
+    delta = prices.shift(lag).diff()
+
     gain = delta.where(delta > 0, 0.0)
     loss = (-delta).where(delta < 0, 0.0)
-    
+
     avg_gain = gain.rolling(window=window).mean()
     avg_loss = loss.rolling(window=window).mean()
-    
+
     rs = avg_gain / avg_loss.replace(0, np.nan)
     rsi = 100 - (100 / (1 + rs))
-    
+
     return rsi
 
 
@@ -202,9 +238,10 @@ def compute_moving_average_ratio(
     prices: pd.DataFrame,
     short_window: int,
     long_window: int,
+    lag: int = 1,
 ) -> pd.DataFrame:
     """
-    Compute ratio of short to long moving average.
+    Compute ratio of short to long moving average. Causal by default (lag=1).
 
     This captures trend strength - values > 1 indicate uptrend.
 
@@ -212,22 +249,25 @@ def compute_moving_average_ratio(
         prices: Price DataFrame.
         short_window: Short MA window.
         long_window: Long MA window.
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         Ratio of short to long moving average.
     """
-    short_ma = prices.rolling(window=short_window).mean()
-    long_ma = prices.rolling(window=long_window).mean()
-    
+    lagged = prices.shift(lag)
+    short_ma = lagged.rolling(window=short_window).mean()
+    long_ma = lagged.rolling(window=long_window).mean()
+
     return short_ma / long_ma
 
 
 def compute_short_term_reversal(
     returns: pd.DataFrame,
     windows: tuple[int, ...] = (1, 3, 5),
+    lag: int = 1,
 ) -> dict[tuple[str, str], pd.Series]:
     """
-    Compute short-term reversal signals.
+    Compute short-term reversal signals. Causal by default (lag=1).
 
     Short-term (1-5 day) returns tend to reverse, especially in liquid stocks.
     Negative past returns predict positive future returns at very short horizons.
@@ -235,13 +275,15 @@ def compute_short_term_reversal(
     Args:
         returns: Daily returns DataFrame with tickers as columns.
         windows: Lookback windows for reversal signal.
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         Dictionary of (ticker, feature_name) -> Series.
     """
+    lagged_returns = returns.shift(lag)
     features = {}
     for window in windows:
-        rev = -returns.rolling(window=window).sum()
+        rev = -lagged_returns.rolling(window=window).sum()
         for ticker in rev.columns:
             features[(ticker, f"reversal_{window}d")] = rev[ticker]
     return features
@@ -250,9 +292,12 @@ def compute_short_term_reversal(
 def compute_abnormal_volume(
     volume: pd.DataFrame,
     window: int = 20,
+    lag: int = 1,
 ) -> dict[tuple[str, str], pd.Series]:
     """
-    Compute abnormal volume as ratio to rolling average.
+    Compute abnormal volume as ratio to rolling average. Causal by default
+    (lag=1) — at time t we compare volume(t-1) to the rolling mean of
+    [t-window, t-2], so day t's own volume never leaks into the feature.
 
     Abnormal volume often precedes or accompanies price moves.
     Values > 1 indicate above-average trading activity.
@@ -260,14 +305,16 @@ def compute_abnormal_volume(
     Args:
         volume: Volume DataFrame with tickers as columns.
         window: Lookback window for average volume (default 20 days).
+        lag: Bars to shift the input by before rolling. Default 1 (causal).
 
     Returns:
         Dictionary of (ticker, feature_name) -> Series.
     """
-    features = {}
-    avg_vol = volume.rolling(window=window, min_periods=max(1, window // 2)).mean()
-    ratio = volume / avg_vol.replace(0, np.nan)
+    lagged_vol = volume.shift(lag)
+    avg_vol = lagged_vol.rolling(window=window, min_periods=max(1, window // 2)).mean()
+    ratio = lagged_vol / avg_vol.replace(0, np.nan)
 
+    features = {}
     for ticker in volume.columns:
         features[(ticker, "abnormal_volume")] = ratio[ticker]
         # Log volume ratio is more normally distributed

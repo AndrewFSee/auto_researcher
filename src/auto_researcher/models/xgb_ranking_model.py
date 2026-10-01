@@ -102,9 +102,14 @@ class XGBRankingModel:
         self.feature_names: Optional[list[str]] = None
         self._eval_results: dict = {}
     
-    def _create_model(self) -> xgb.XGBRanker:
-        """Create a fresh XGBRanker instance with configured parameters."""
+    def _create_model(self, early_stopping_rounds: Optional[int] = None) -> xgb.XGBRanker:
+        """Create a fresh XGBRanker instance with configured parameters.
+
+        XGBoost >= 2.0 only accepts ``early_stopping_rounds`` on the estimator,
+        not in ``fit()``, so it is set here when a validation set is used.
+        """
         return xgb.XGBRanker(
+            early_stopping_rounds=early_stopping_rounds,
             objective=self.config.objective,
             n_estimators=self.config.n_estimators,
             max_depth=self.config.max_depth,
@@ -164,8 +169,6 @@ class XGBRankingModel:
             f"{n_groups} groups (avg size: {avg_group_size:.1f})"
         )
         
-        self.model = self._create_model()
-        
         # Prepare fit kwargs
         fit_kwargs = {
             "X": X.values,
@@ -174,15 +177,17 @@ class XGBRankingModel:
         }
         
         # Add validation set if provided
+        early_stopping = None
         if X_val is not None and y_val is not None:
             if groups_val is None and isinstance(X_val.index, pd.MultiIndex):
                 groups_val = X_val.groupby(level=0).size().values
             
             fit_kwargs["eval_set"] = [(X_val.values, y_val.values)]
             fit_kwargs["eval_group"] = [groups_val]
-            
-            if self.config.early_stopping_rounds:
-                fit_kwargs["early_stopping_rounds"] = self.config.early_stopping_rounds
+            fit_kwargs["verbose"] = False
+            early_stopping = self.config.early_stopping_rounds or None
+        
+        self.model = self._create_model(early_stopping_rounds=early_stopping)
         
         # Fit the model
         self.model.fit(**fit_kwargs)
@@ -589,9 +594,14 @@ class XGBRegressionModel:
         self.feature_names: Optional[list[str]] = None
         self._eval_results: dict = {}
     
-    def _create_model(self) -> xgb.XGBRegressor:
-        """Create a fresh XGBRegressor instance with configured parameters."""
+    def _create_model(self, early_stopping_rounds: Optional[int] = None) -> xgb.XGBRegressor:
+        """Create a fresh XGBRegressor instance with configured parameters.
+
+        XGBoost >= 2.0 only accepts ``early_stopping_rounds`` on the estimator,
+        not in ``fit()``, so it is set here when a validation set is used.
+        """
         return xgb.XGBRegressor(
+            early_stopping_rounds=early_stopping_rounds,
             objective=self.config.objective,
             n_estimators=self.config.n_estimators,
             max_depth=self.config.max_depth,
@@ -643,8 +653,6 @@ class XGBRegressionModel:
             + (f", {n_groups} dates" if n_groups else "")
         )
         
-        self.model = self._create_model()
-        
         # Prepare fit kwargs
         fit_kwargs = {
             "X": X.values,
@@ -656,11 +664,13 @@ class XGBRegressionModel:
             fit_kwargs["sample_weight"] = sample_weight
         
         # Add validation set if provided
+        early_stopping = None
         if X_val is not None and y_val is not None:
             fit_kwargs["eval_set"] = [(X_val.values, y_val.values)]
-            
-            if self.config.early_stopping_rounds:
-                fit_kwargs["early_stopping_rounds"] = self.config.early_stopping_rounds
+            fit_kwargs["verbose"] = False
+            early_stopping = self.config.early_stopping_rounds or None
+        
+        self.model = self._create_model(early_stopping_rounds=early_stopping)
         
         # Fit the model
         self.model.fit(**fit_kwargs)

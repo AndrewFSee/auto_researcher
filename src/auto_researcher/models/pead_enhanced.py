@@ -9,27 +9,32 @@ Based on forward-bias-free backtesting (2026-01-30), this model uses:
 4. Revenue surprise as complementary signal (Jegadeesh & Livnat 2006)
 
 ================================================================================
-BACKTEST RESULTS (2020-2024, N=1,948 events)
+EVIDENCE (re-measured 2026-09-29; see docs/results/pead_event_study.md)
 ================================================================================
 
-Base Signal (all earnings):
-  - ret40d IC: +0.049** (p=0.029)
-  - ret60d IC: +0.047** (p=0.038)
-  - L/S Spread: +1.84% at 40d, +2.05% at 60d
+Re-run via: ``python scripts/pead_event_study.py --offline``
 
-Enhanced Signal (big surprises only, N=334):
-  - ret40d IC: +0.152*** (p=0.006)  ← 3x improvement!
-  - ret60d IC: +0.138** (p=0.012)
-  - L/S Spread: +3.02% at 40d, +3.55% at 60d
+Events are keyed on the actual report date and returns are measured in
+excess of SPY from the close *after* the announcement (the reaction day is
+excluded because the surprise is not known before it):
 
-Combined Signal (big surprise + consecutive beat pattern):
-  - L/S Spread: +5.08% at 60d
-  - Fewer trades but stronger signal
+  - 40-day drift: mean quarterly IC +0.137 (t = 3.1 over 9 quarters);
+    big beats (>= +20%) beat big misses by +5.2%; +/-5% threshold: +4.5%
+  - 20-day drift: IC +0.090 (t = 2.7); 60-day: IC +0.16 (t = 2.3)
+
+The sample is short (2023-10 to 2026-01) and survivorship-biased (today's
+large caps), and recent academic work finds large-cap PEAD much weaker, so
+the signal is marked ``validated: False``: tentative, not proven.
+
+RETRACTED: the previous "IC +0.171 / +0.220, L/S +13.6% / +14.9%" figures
+were computed from fiscal quarter-end dates. Reports arrive ~18 trading days
+later, so those windows contained the announcement reaction itself.
 
 Revenue Surprise (Jegadeesh & Livnat 2006):
   - Revenue surprise is incrementally informative beyond EPS surprise
   - Dual-beat (both EPS and revenue) drift ~40% larger than EPS-only
   - Revenue miss + EPS beat = weaker drift (quality concern)
+  (Revenue blend not yet re-validated under the new harness.)
 
 ================================================================================
 USAGE
@@ -63,26 +68,28 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION
 # ==============================================================================
 
+# Measured by scripts/pead_event_study.py (docs/results/pead_event_study.md).
+# ls_spread_* are mean market-adjusted returns of beats minus misses over the
+# holding window, used as the signal's (tentative) expected L/S spread.
 PEAD_CONFIG = {
-    'backtest_date': '2026-01-30',
-    'backtest_period': '2020-2024',
-    'total_events': 1948,
-    
-    # Base signal performance
+    'backtest_date': '2026-09-29',
+    'backtest_period': '2023-10..2026-01',
+    'total_events': 1050,
+    'n_quarters': 9,
+    'validated': False,  # short, survivorship-biased sample: treat as tentative
+
+    # Any surprise beyond +/-5%
     'base': {
-        'ic_ret40d': 0.049,
-        'ic_ret60d': 0.047,
-        'ls_spread_40d': 0.0184,
-        'ls_spread_60d': 0.0205,
+        'ic_drift_40d': 0.137,
+        'ls_spread_40d': 0.0454,
     },
-    
-    # Enhanced signal (big surprises only)
+
+    # Big surprises only (|SUE| >= 20%)
     'enhanced': {
-        'n_events': 334,
-        'ic_ret40d': 0.152,  # 3x improvement!
-        'ic_ret60d': 0.138,
-        'ls_spread_40d': 0.0302,
-        'ls_spread_60d': 0.0355,
+        'ic_drift_40d': 0.137,
+        'ls_spread_40d': 0.0515,
+        'ic_drift_60d': 0.164,
+        'ls_spread_60d': 0.0359,
     },
     
     # Thresholds
@@ -192,9 +199,9 @@ class EnhancedPEADModel:
         Args:
             cache_ttl_hours: How long to cache earnings data (hours).
             require_big_surprise: If True (default), only generate actionable signals
-                for big surprises (|SUE| > 20%). This improves IC from 0.049 to 0.152
-                (3x improvement) at the cost of fewer signals (N=334 vs N=1948).
-                Set to False to use all earnings events.
+                for big surprises (|SUE| > 20%), trading fewer signals for a
+                slightly larger spread (+5.2% vs +4.5% over 40 days in the
+                event study). Set to False to use all earnings events.
         """
         self.cache_ttl_hours = cache_ttl_hours
         self.require_big_surprise = require_big_surprise
@@ -422,13 +429,13 @@ class EnhancedPEADModel:
                         if signal.strength == "moderate":
                             signal.strength = "strong"
                         reasons.append(f"Revenue also beat: {latest.revenue_surprise*100:+.1f}% YoY (dual beat)")
-                        signal.expected_return = PEAD_CONFIG['enhanced']['ls_spread_40d'] * 1.4
+                        signal.expected_return = PEAD_CONFIG['enhanced']['ls_spread_40d']
                     elif latest.revenue_beat == False:
                         # EPS beat but revenue miss: quality concern, downgrade
                         if signal.strength == "strong":
                             signal.strength = "moderate"
                         reasons.append(f"Revenue missed: {latest.revenue_surprise*100:+.1f}% YoY (quality concern)")
-                        signal.expected_return = PEAD_CONFIG['enhanced']['ls_spread_40d'] * 0.7
+                        signal.expected_return = PEAD_CONFIG['enhanced']['ls_spread_40d']
                     else:
                         signal.expected_return = PEAD_CONFIG['enhanced']['ls_spread_40d']
                 else:
@@ -447,13 +454,13 @@ class EnhancedPEADModel:
                         if signal.strength == "moderate":
                             signal.strength = "strong"
                         reasons.append(f"Revenue also missed: {latest.revenue_surprise*100:+.1f}% YoY (dual miss)")
-                        signal.expected_return = -PEAD_CONFIG['enhanced']['ls_spread_40d'] * 1.4
+                        signal.expected_return = -PEAD_CONFIG['enhanced']['ls_spread_40d']
                     elif latest.revenue_beat == True:
                         # EPS miss but revenue beat: less severe
                         if signal.strength == "strong":
                             signal.strength = "moderate"
                         reasons.append(f"Revenue grew: {latest.revenue_surprise*100:+.1f}% YoY (offsetting)")
-                        signal.expected_return = -PEAD_CONFIG['enhanced']['ls_spread_40d'] * 0.7
+                        signal.expected_return = -PEAD_CONFIG['enhanced']['ls_spread_40d']
                     else:
                         signal.expected_return = -PEAD_CONFIG['enhanced']['ls_spread_40d']
                 else:
@@ -486,7 +493,7 @@ class EnhancedPEADModel:
         
         # Actionability check
         # When require_big_surprise=True (default), only big surprises are actionable.
-        # This improves IC from 0.049 to 0.152 (3x) by filtering to high-conviction events.
+        # Big surprises carry a slightly larger drift spread (see PEAD_CONFIG).
         if self.require_big_surprise and not signal.is_big_surprise:
             signal.is_actionable = False
             if abs(latest.sue) >= 0.05:

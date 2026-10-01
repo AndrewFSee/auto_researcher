@@ -73,6 +73,13 @@ class LLMReviewConfig:
     max_total_calls: int = 15  # Hard cap on LLM calls per run
     skip_hold_signals: bool = True  # Don't review holds
 
+    # Leakage controls
+    # When True, ticker + company name are masked before being sent to the LLM
+    # (replaced with {SECTOR}/{SIZE_BUCKET}/REDACTED). This reduces the risk
+    # that the model's training-data priors bias the review toward a known
+    # narrative for e.g. AAPL/NVDA/TSLA. Evidence strings are scrubbed too.
+    mask_tickers: bool = True
+
 
 # ---------------------------------------------------------------------------
 # Prompt Templates
@@ -410,8 +417,9 @@ class LLMReviewAgent:
                     break
 
         # Fallback: if we haven't selected enough stocks (e.g. all HOLD),
-        # fill remaining slots with top-N by composite score
-        if len(selected) < n:
+        # fill remaining slots with top-N by composite score -- unless the
+        # config says plain holds should not be reviewed.
+        if len(selected) < n and not self.config.skip_hold_signals:
             for stock in sorted_stocks:
                 if stock["ticker"] in seen:
                     continue
@@ -517,9 +525,43 @@ class LLMReviewAgent:
     # Prompt building
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _size_bucket(market_cap: float | None) -> str:
+        if market_cap is None or market_cap <= 0:
+            return "UNKNOWN"
+        if market_cap >= 200e9:
+            return "MEGA_CAP"
+        if market_cap >= 10e9:
+            return "LARGE_CAP"
+        if market_cap >= 2e9:
+            return "MID_CAP"
+        if market_cap >= 300e6:
+            return "SMALL_CAP"
+        return "MICRO_CAP"
+
+    def _scrub_identifiers(self, text: str, ticker: str, company: str) -> str:
+        """Remove ticker/company mentions from free-form text before sending to LLM."""
+        if not text:
+            return text
+        import re
+
+        scrubbed = text
+        for needle in (ticker, company):
+            if not needle or not isinstance(needle, str):
+                continue
+            # Word-boundary replace to avoid clobbering substrings.
+            pattern = re.compile(
+                rf"\b{re.escape(needle)}\b", flags=re.IGNORECASE
+            )
+            scrubbed = pattern.sub("REDACTED", scrubbed)
+        return scrubbed
+
     def _build_review_prompt(self, stock: dict) -> str:
         """Build the full review prompt for a stock."""
         rationales = stock.get("agent_rationales", {})
+        ticker_raw = stock["ticker"]
+        company_raw = stock.get("company_name", "Unknown")
+        mask = self.config.mask_tickers
 
         # Gather evidence from all agents
         evidence_lines = []
@@ -535,7 +577,12 @@ class LLMReviewAgent:
             if evidence:
                 evidence_lines.append(f"  [{agent.upper()}]")
                 for item in evidence:
-                    evidence_lines.append(f"    - {item}")
+                    safe_item = (
+                        self._scrub_identifiers(str(item), ticker_raw, company_raw)
+                        if mask
+                        else item
+                    )
+                    evidence_lines.append(f"    - {safe_item}")
 
         # Filing tone rationale
         filing_data = rationales.get("filing_tone", {})
@@ -576,13 +623,30 @@ class LLMReviewAgent:
 
         ml_norm = (stock.get("ml_percentile", 50) - 50) / 50
 
+        sector = stock.get("sector", "Unknown")
+        size_bucket = self._size_bucket(stock.get("market_cap"))
+        if mask:
+            ticker_display = f"{sector}/{size_bucket}"
+            company_display = "REDACTED"
+            conflict_summary_safe = self._scrub_identifiers(
+                str(conflict_summary), ticker_raw, company_raw
+            )
+            key_factors_safe = self._scrub_identifiers(
+                key_factors_str, ticker_raw, company_raw
+            )
+        else:
+            ticker_display = ticker_raw
+            company_display = company_raw
+            conflict_summary_safe = conflict_summary
+            key_factors_safe = key_factors_str
+
         return STOCK_REVIEW_TEMPLATE.format(
-            ticker=stock["ticker"],
-            company=stock.get("company_name", "Unknown"),
+            ticker=ticker_display,
+            company=company_display,
             signal=stock.get("signal", "hold").upper(),
             composite=stock.get("composite_score", 0.0),
             rank=stock.get("final_rank", 0),
-            sector=stock.get("sector", "Unknown"),
+            sector=sector,
             ml_pct=stock.get("ml_percentile", 50),
             ml_norm=ml_norm,
             sentiment=stock.get("sentiment_score", 0.0),
@@ -593,8 +657,8 @@ class LLMReviewAgent:
             momentum=stock.get("momentum_score", 0.0),
             filing_tone=stock.get("filing_tone_score", 0.0),
             call_qual=stock.get("earnings_call_qual_score", 0.0),
-            conflict_summary=conflict_summary,
-            key_factors=key_factors_str,
+            conflict_summary=conflict_summary_safe,
+            key_factors=key_factors_safe,
             evidence_block=evidence_block,
         )
 

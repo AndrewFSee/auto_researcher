@@ -149,13 +149,13 @@ class EarningsAnalysis:
     # ==========================================================================
     # PEAD Signal (Post-Earnings Announcement Drift)
     # ==========================================================================
-    # Based on bias-free backtest using yfinance earnings_dates (2026-01-30)
-    # Uses ACTUAL announcement dates, not fiscal period ends
+    # Evidence: docs/results/pead_event_study.md; PEAD_CONFIG in
+    # models/pead_enhanced.py is the source of truth. Tentative, not validated.
     #
     # STRENGTHS:
-    #   - IC=+0.152*** for big surprises (>20%), 3x improvement over base
-    #   - L/S spread: +3.02% at 40d, +3.55% at 60d
-    #   - Works best 0-40 days after earnings
+    #   - Announcement-dated 40d drift IC +0.137 (t = 3.1, 9 quarters, 2023-10..2026-01)
+    #   - Big beats minus big misses: +5.2% market-adjusted over 40 trading days
+    #   - Works best 20-40 days after the announcement
     #   - Consecutive beat/miss patterns add momentum
     #
     # WEAKNESSES:
@@ -1047,8 +1047,9 @@ Focus on:
         # =======================================================================
         # PEAD Signal (Post-Earnings Announcement Drift)
         # =======================================================================
-        # This uses yfinance for ACTUAL announcement dates (bias-free)
-        # IC=+0.152*** for big surprises, much stronger than transcript sentiment
+        # This uses yfinance for ACTUAL announcement dates (bias-free).
+        # Tentative evidence: 40d drift IC +0.137 over 9 quarters; see
+        # docs/results/pead_event_study.md.
         if self._pead_model:
             try:
                 pead_signal = self._pead_model.get_signal(ticker)
@@ -1143,7 +1144,7 @@ Focus on:
                 if r.pead_is_actionable and r.pead_expected_return:
                     lines.append(f"      Expected L/S spread: {r.pead_expected_return*100:+.1f}% over {r.pead_recommended_days}d")
                     if r.pead_is_big_surprise:
-                        lines.append(f"      ⭐ BIG SURPRISE - High confidence signal (IC=0.15***)")
+                        lines.append("      ⭐ BIG SURPRISE (|SUE| >= 20%; tentative 40d drift IC +0.14)")
             
             if r.key_takeaways:
                 lines.append(f"   💡 Takeaways:")

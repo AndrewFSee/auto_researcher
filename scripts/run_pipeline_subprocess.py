@@ -6,7 +6,7 @@ writing progress and results to JSON files that the Streamlit app polls.
 
 Usage (called by app.py via subprocess):
     python scripts/run_pipeline_subprocess.py --universe sp100 --ml-top 25 \
-        --ml-weight 0.35 --batch-size 5 --verbose \
+        --batch-size 5 --verbose \
         --skip-ml --skip-agents \
         --progress-file data/ranking_results/_progress.json \
         --results-file data/ranking_results/_final.json
@@ -55,7 +55,9 @@ from scripts.run_ranking_low_memory import (
     StockRanking,
 )
 
-RESULTS_DIR = PROJECT_ROOT / "data" / "ranking_results"
+RESULTS_DIR = Path(
+    os.environ.get("AUTO_RESEARCHER_RESULTS_DIR", PROJECT_ROOT / "data" / "ranking_results")
+)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -71,7 +73,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--universe", default="sp100")
     parser.add_argument("--ml-top", type=int, default=25)
-    parser.add_argument("--ml-weight", type=float, default=0.35)
+    parser.add_argument("--ml-weight", type=float, default=None,
+                        help="Force the ML weight in the composite (default: evidence-based)")
     parser.add_argument("--batch-size", type=int, default=5)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--skip-ml", action="store_true")
@@ -108,7 +111,7 @@ def main():
 
         ml_results_file = RESULTS_DIR / f"ml_screening_{args.universe}_{args.ml_top}.json"
         agent_results_file = RESULTS_DIR / f"agent_analysis_{args.universe}_{args.ml_top}.json"
-        ml_ic = 0.15
+        ml_ic = float("nan")
 
         if args.skip_ml and ml_results_file.exists():
             rankings = load_ml_results(ml_results_file)
@@ -119,7 +122,8 @@ def main():
             t0 = time.time()
             rankings, ml_ic = run_ml_screening(universe=args.universe, top_k=args.ml_top)
             save_results(rankings, ml_results_file)
-            log(f"ML screening complete: {len(rankings)} candidates in {time.time()-t0:.1f}s (IC={ml_ic:.3f})")
+            log(f"ML screening complete: {len(rankings)} candidates in {time.time()-t0:.1f}s "
+                f"(holdout IC diagnostic={ml_ic:+.3f})")
 
         clear_memory()
         update_progress("ml_screening", 25, "complete",

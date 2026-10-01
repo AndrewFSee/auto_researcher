@@ -118,7 +118,7 @@ def merge_signals(revision_df, pead_df):
     return merged
 
 
-def fetch_post_earnings_returns(df, horizons=[5, 10, 20, 40, 60]):
+def fetch_post_earnings_returns(df, horizons=(5, 10, 20, 40, 60)):
     """Fetch returns after earnings for merged dataset"""
     print(f"\nFetching post-earnings returns for {len(df['ticker'].unique())} tickers...")
     

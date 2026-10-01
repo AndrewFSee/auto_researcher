@@ -3,12 +3,22 @@ Test Transcript VectorStore: build from synthetic data, query, and verify
 peer comparison integrates with EarningsCallQualModel.
 """
 
+import shutil
 import sys
 import tempfile
-import shutil
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+
+def _require_vector_stack() -> None:
+    """Skip unless the optional vector-store stack is installed."""
+    pytest.importorskip("chromadb", reason="chromadb is an optional dependency")
+    pytest.importorskip(
+        "sentence_transformers", reason="sentence-transformers is an optional dependency"
+    )
 
 
 def make_synthetic_transcript(ticker: str, tone: str, quarter: int, year: int) -> str:
@@ -100,7 +110,9 @@ def test_chunking():
     print("✓ Chunking test passed")
 
 
+@pytest.mark.integration
 def test_vectorstore_build_and_query():
+    _require_vector_stack()
     """Test building and querying a small vectorstore from synthetic data."""
     from auto_researcher.data.transcript_vectorstore import (
         TranscriptVectorStore, _parse_and_chunk_transcript,
@@ -207,7 +219,9 @@ def test_vectorstore_build_and_query():
         pass  # Don't clean up yet, need for peer comparison test
 
 
+@pytest.mark.integration
 def test_peer_tone_delta():
+    _require_vector_stack()
     """Test that EarningsCallQualModel uses vectorstore for peer tone delta."""
     from auto_researcher.data.transcript_vectorstore import (
         TranscriptVectorStore, _parse_and_chunk_transcript,

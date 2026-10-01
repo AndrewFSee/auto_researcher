@@ -39,7 +39,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT))
 
 # Import pipeline functions (lazy — deferred until needed)
-RESULTS_DIR = PROJECT_ROOT / "data" / "ranking_results"
+RESULTS_DIR = Path(
+    os.environ.get("AUTO_RESEARCHER_RESULTS_DIR", PROJECT_ROOT / "data" / "ranking_results")
+)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -168,7 +170,7 @@ with st.sidebar:
 
     # --- Weights ---
     st.subheader("⚖️ Weights")
-    ml_weight = st.slider("ML Weight Override", 0.0, 1.0, 0.35, 0.05, help="Override ML weight in composite (0 = auto IC-proportional)", key="sidebar_ml_weight")
+    ml_weight = st.slider("ML Weight Override", 0.0, 1.0, 0.0, 0.05, help="Force the ML weight in the composite (0 = evidence-based weights)", key="sidebar_ml_weight")
     
     # --- Execution ---
     st.subheader("⚡ Execution")
@@ -235,11 +237,11 @@ with st.sidebar:
     st.divider()
 
     # --- Run Button ---
-    run_pipeline = st.button("🚀 Run Pipeline", use_container_width=True, type="primary", key="sidebar_run_pipeline")
+    run_pipeline = st.button("🚀 Run Pipeline", width="stretch", type="primary", key="sidebar_run_pipeline")
 
     # --- Load Previous ---
     st.caption("— or —")
-    load_previous = st.button("📂 Load Previous Results", use_container_width=True, key="sidebar_load_previous")
+    load_previous = st.button("📂 Load Previous Results", width="stretch", key="sidebar_load_previous")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -348,15 +350,16 @@ if run_pipeline:
 
     # Build command
     cmd = [
-        str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"),
+        sys.executable,  # same interpreter/venv that runs Streamlit, on any OS
         str(PROJECT_ROOT / "scripts" / "run_pipeline_subprocess.py"),
         "--universe", universe,
         "--ml-top", str(ml_top),
-        "--ml-weight", str(ml_weight),
         "--batch-size", str(batch_size),
         "--progress-file", str(_PROGRESS_FILE),
         "--results-file", str(RESULTS_DIR / "_final.json"),
     ]
+    if ml_weight > 0:  # 0 = evidence-based weights (see the slider help)
+        cmd += ["--ml-weight", str(ml_weight)]
     if verbose:
         cmd.append("--verbose")
     if skip_ml:
@@ -614,7 +617,7 @@ if st.session_state.get("pipeline_ran"):
             st.divider()
             st.dataframe(
                 ml_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     "ML Score": st.column_config.NumberColumn(format="%.4f"),
@@ -646,7 +649,7 @@ if st.session_state.get("pipeline_ran"):
             # Heatmap-style table
             st.dataframe(
                 agent_df,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 column_config={
                     col: st.column_config.NumberColumn(format="%+.3f")
@@ -956,7 +959,7 @@ if st.session_state.get("pipeline_ran"):
 
                     if sig_data:
                         sig_df = pd.DataFrame(sig_data)
-                        st.dataframe(sig_df, use_container_width=True, hide_index=True)
+                        st.dataframe(sig_df, width="stretch", hide_index=True)
 
                         # Bar chart of avg return by signal
                         chart_sig_df = sig_df.set_index("Signal")[["Avg Return %"]]
@@ -1016,7 +1019,7 @@ if st.session_state.get("pipeline_ran"):
 
                     st.dataframe(
                         perf_df_sorted,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         column_config={
                             "Return %": st.column_config.NumberColumn(format="%+.2f"),

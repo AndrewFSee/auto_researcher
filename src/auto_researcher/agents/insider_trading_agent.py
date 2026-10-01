@@ -30,6 +30,13 @@ from urllib.parse import urljoin
 
 import requests
 
+# Load environment variables (SEC_API_USER_AGENT is read at import time below)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Import InsiderClusterModel for enhanced signal
@@ -56,7 +63,11 @@ EDGAR_COMPANY_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 EDGAR_FILINGS_URL = "https://www.sec.gov/cgi-bin/browse-edgar"
 
 # User agent for SEC requests
-USER_AGENT = os.getenv("SEC_USER_AGENT", "AutoResearcher research@example.com")
+# SEC EDGAR requires a real contact; SEC_API_USER_AGENT is the name used by
+# every other module and .env.example (SEC_USER_AGENT kept for compatibility).
+USER_AGENT = os.getenv("SEC_API_USER_AGENT") or os.getenv(
+    "SEC_USER_AGENT", "AutoResearcher research@example.com"
+)
 
 
 # ==============================================================================

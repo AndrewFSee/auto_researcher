@@ -32,13 +32,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Results directory (relative to CWD)
-RESULTS_DIR = Path("data/ranking_results")
+# Windows consoles default to cp1252, which cannot print the box-drawing
+# characters in the ranking table (the run crashed after saving results).
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
+# Results directory, anchored to the project root. (It used to be relative to
+# the working directory, so running from elsewhere silently used a different
+# data/ folder and missed data/agent_ic.json.) Override with
+# AUTO_RESEARCHER_RESULTS_DIR.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RESULTS_DIR = Path(
+    os.environ.get("AUTO_RESEARCHER_RESULTS_DIR", PROJECT_ROOT / "data" / "ranking_results")
+)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Report directory (repo root)
-REPORT_DIR = Path(__file__).resolve().parent.parent / "data" / "ranking_results"
-REPORT_DIR.mkdir(parents=True, exist_ok=True)
+# Markdown reports are written next to the JSON results
+REPORT_DIR = RESULTS_DIR
 
 
 def clear_memory():
@@ -363,7 +374,7 @@ def add_lightweight_cross_validation(rankings: list["StockRanking"]) -> None:
             score = getattr(stock, attr, 0.0)
             score_dir = 1 if score > 0.1 else -1 if score < -0.1 else 0
 
-            def _agreement(ret: float | None) -> str:
+            def _agreement(ret: float | None, score_dir: int = score_dir) -> str:
                 if ret is None or score_dir == 0:
                     return "neutral"
                 return "supports" if (ret > 0 and score_dir > 0) or (ret < 0 and score_dir < 0) else "conflicts"
@@ -541,8 +552,7 @@ def run_ml_screening(
     logger.info(f"=" * 60)
     
     # Import here to avoid loading until needed
-    sys.path.insert(0, str(Path(__file__).parent.parent))
-    from recommend import generate_recommendations, UNIVERSES
+    from auto_researcher.screening import UNIVERSES, generate_recommendations, get_last_model_ic
     
     # Get tickers
     if universe in UNIVERSES:
@@ -560,16 +570,11 @@ def run_ml_screening(
             explain=False,
         )
         
-        # Get the ML model's historical IC from the recommendations metadata
-        # The generate_recommendations function now returns IC in recommendations[0] metadata
-        ml_ic = 0.15  # Default
-        if recommendations and hasattr(recommendations[0], 'predicted_return'):
-            # We store IC in a module-level variable as a workaround
-            import recommend
-            if hasattr(recommend, '_last_model_ic'):
-                ml_ic = recommend._last_model_ic
-        
-        logger.info(f"ML model historical IC: {ml_ic:.3f}")
+        # Purged single-holdout IC of the freshly trained model. Logged as a
+        # diagnostic only: ~3 independent observations is too noisy to set a
+        # composite weight (that comes from the walk-forward calibration).
+        ml_ic = get_last_model_ic()
+        logger.info(f"ML model purged holdout IC (diagnostic): {ml_ic:+.3f}")
         
         # Convert to StockRanking objects
         rankings = []
@@ -1128,9 +1133,9 @@ def run_agent_analysis(
 
 def compute_composite_scores(
     rankings: list[StockRanking],
-    ml_weight: float = 0.35,
+    ml_weight: float | None = None,
     verbose: bool = False,
-    ml_ic: float = 0.15,
+    ml_ic: float | None = None,
     enable_factor_rotation: bool = True,
 ) -> list[StockRanking]:
     """
@@ -1143,44 +1148,20 @@ def compute_composite_scores(
     logger.info(f"STAGE 3: IC-WEIGHTED COMPOSITE SCORING")
     logger.info(f"=" * 60)
     
-    # Default ICs (fallback if calibration file missing)
-    default_ics = {
-        "ml": 0.15,
-        "sentiment": 0.08,
-        "fundamental": 0.10,
-        "earnings": 0.12,
-        "insider": 0.06,
-        "thematic": 0.05,
-        "momentum": 0.07,
-        "filing_tone": 0.04,
-        "earnings_call_qual": 0.05,
-    }
-    
-    # Load empirically calibrated ICs from data/agent_ic.json if available
+    # Weights come from measured, signed, sample-size-shrunk ICs in
+    # data/agent_ic.json (see auto_researcher.composite). Agents without
+    # out-of-sample evidence share a small uniform prior; anti-predictive
+    # agents get zero weight; calibrations known to contain look-ahead are
+    # ignored. ``ml_ic`` (the runtime holdout diagnostic) is only logged.
+    from auto_researcher.composite import AGENTS, composite_weights, load_agent_evidence
+
     agent_ic_file = RESULTS_DIR.parent / "agent_ic.json"
-    model_ics = dict(default_ics)  # start with defaults
-    if agent_ic_file.exists():
-        try:
-            with open(agent_ic_file) as f:
-                calibrated = json.load(f)
-            ic_source = "calibrated"
-            for agent in ["sentiment", "fundamental", "earnings", "insider", "thematic", "momentum", "filing_tone", "earnings_call_qual"]:
-                if agent in calibrated and "mean_ic" in calibrated[agent]:
-                    # Use absolute IC (direction doesn't matter for weighting)
-                    # Apply floor of 0.02 so no agent gets zero weight
-                    empirical_ic = abs(calibrated[agent]["mean_ic"])
-                    model_ics[agent] = max(empirical_ic, 0.02)
-            logger.info(f"Loaded calibrated ICs from {agent_ic_file.name}")
-        except Exception as e:
-            logger.warning(f"Failed to load calibrated ICs: {e}, using defaults")
-            ic_source = "defaults"
-    else:
-        ic_source = "defaults"
-        logger.info(f"No calibration file found, using default ICs")
-    
-    # ML IC comes from runtime OOS calculation
-    model_ics["ml"] = max(ml_ic, 0.05)
-    
+    evidence = load_agent_evidence(agent_ic_file)
+    _, model_ics, provenance = composite_weights(evidence)
+    ic_source = "calibrated" if evidence else "prior"
+    if ml_ic is not None and ml_ic == ml_ic:  # not NaN
+        logger.info(f"ML runtime holdout IC (diagnostic only): {ml_ic:+.3f}")
+
     # ── Factor Rotation: Regime-Aware IC Adjustment ──────────────────
     # Dynamically adjust factor weights based on leading indicators
     # (VIX term structure, credit spreads, factor momentum, etc.)
@@ -1210,27 +1191,27 @@ def compute_composite_scores(
             logger.warning(f"Factor rotation failed, using static ICs: {e}")
     
     # Calculate IC-proportional weights
+    model_ics = {k: max(v, 0.0) for k, v in model_ics.items()}
     total_ic = sum(model_ics.values())
-    ic_weights = {k: v / total_ic for k, v in model_ics.items()}
+    if total_ic > 0:
+        ic_weights = {k: v / total_ic for k, v in model_ics.items()}
+    else:
+        ic_weights = {k: 1.0 / len(model_ics) for k in model_ics}
     
-    # Allow user to override ML weight if desired
-    if abs(ml_weight - 0.35) > 0.01:  # User specified different weight
-        # Rescale: keep ML at user-specified weight, redistribute rest
-        user_ml_weight = ml_weight
-        other_weight = 1 - user_ml_weight
+    # Optional explicit ML weight (``--ml-weight``); the rest keep their proportions
+    if ml_weight is not None:
         other_total_ic = total_ic - model_ics["ml"]
         for k in ic_weights:
             if k == "ml":
-                ic_weights[k] = user_ml_weight
+                ic_weights[k] = ml_weight
+            elif other_total_ic > 0:
+                ic_weights[k] = (model_ics[k] / other_total_ic) * (1 - ml_weight)
             else:
-                ic_weights[k] = (model_ics[k] / other_total_ic) * other_weight
+                ic_weights[k] = (1 - ml_weight) / (len(ic_weights) - 1)
     
-    logger.info(f"Model ICs ({ic_source}):")
-    for name, ic in model_ics.items():
-        default_ic = default_ics.get(name, 0)
-        delta = ic - default_ic
-        delta_str = f" ({delta:+.3f} vs default)" if ic_source == "calibrated" and abs(delta) > 0.001 else ""
-        logger.info(f"  {name}: IC = {ic:.3f}{delta_str}")
+    logger.info(f"Model ICs ({ic_source}; shrunk, signed, prior for unvalidated agents):")
+    for name in AGENTS:
+        logger.info(f"  {name}: IC = {model_ics[name]:.4f}  [{provenance.get(name, 'prior')}]")
     logger.info(f"")
     logger.info(f"IC-Weighted Model Contributions:")
     for name, weight in ic_weights.items():
@@ -1519,7 +1500,7 @@ def generate_report(
     lines.append("|---|---|---|---|---|---|")
     for row in final_sorted:
         r = row.get("agent_rationales", {})
-        def band(agent: str) -> str:
+        def band(agent: str, r: dict = r) -> str:
             ctx = (r.get(agent) or {}).get("context") or {}
             if not ctx:
                 return "n/a"
@@ -1551,7 +1532,8 @@ def main():
     parser.add_argument("--universe", default="sp100", choices=["sp500", "sp100", "large_cap", "core_tech"])
     parser.add_argument("--ml-top", type=int, default=25, help="Stocks to pass from ML screening")
     parser.add_argument("--final-top", type=int, default=10, help="Final top N to display")
-    parser.add_argument("--ml-weight", type=float, default=0.35, help="ML score weight in composite")
+    parser.add_argument("--ml-weight", type=float, default=None,
+                        help="Force the ML weight in the composite (default: evidence-based)")
     parser.add_argument("--batch-size", type=int, default=5, help="Batch size for memory clearing")
     parser.add_argument("--skip-ml", action="store_true", help="Skip ML, load from previous results")
     parser.add_argument("--skip-agents", action="store_true", help="Skip agents, load from previous results")
@@ -1579,12 +1561,12 @@ def main():
     print(f"  Universe: {args.universe}")
     print(f"  ML Top: {args.ml_top}")
     print(f"  Final Top: {args.final_top}")
-    print(f"  ML Weight: {args.ml_weight}")
+    print(f"  ML Weight: {args.ml_weight if args.ml_weight is not None else 'evidence-based'}")
     print(f"  Verbose: {args.verbose}")
     print("=" * 80 + "\n")
     
     # Stage 1: ML Screening
-    ml_ic = 0.15  # Default
+    ml_ic = float("nan")  # unknown until Stage 1 runs
     if args.skip_ml and ml_results_file.exists():
         logger.info(f"Loading ML results from {ml_results_file}")
         rankings = load_ml_results(ml_results_file)
@@ -1720,7 +1702,7 @@ def main():
         except Exception as e:
             logger.error("Deep research failed: %s", e)
 
-    # Generate markdown report in repo root
+    # Generate markdown report
     report_file = REPORT_DIR / f"report_{args.universe}_{datetime.now().strftime('%Y%m%d')}.md"
     generate_report(
         universe=args.universe,
