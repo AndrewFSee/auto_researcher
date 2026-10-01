@@ -86,7 +86,7 @@ print(result.summary()["ic_mean"], result.summary()["net_ir_vs_equal_weight"])
 | Point-in-time news-sentiment signals | `features/news_signals.py` |
 | Point-in-time fundamentals from SEC XBRL filings (first-reported, usable after filing, TTM) | `data/sec_fundamentals.py` |
 | Market cap with split handling, EV, value/quality ratios, reverse DCF | `features/valuation.py` |
-| Purged walk-forward splits, combinatorial purged CV, deflated Sharpe | `validation/` |
+| Purged walk-forward splits, deflated Sharpe | `validation/` |
 | Guard against event data keyed on fiscal period ends | `validation/event_dates.py` |
 | Evidence-based weights (signed, sample-size-shrunk ICs) | `composite.py` |
 
@@ -147,20 +147,17 @@ git clone https://github.com/AndrewFSee/auto_researcher.git
 cd auto_researcher
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 
-pip install -e ".[dev,dashboard]"   # add nlp, llm, altdata, tuning, finagg as needed
+pip install -e ".[dev,dashboard]"   # add nlp, llm, research as needed
 cp .env.example .env                # API keys; SEC_API_USER_AGENT needs a real contact
 pytest -q
 ```
 
 | Extra | Adds |
 | --- | --- |
-| `nlp` | torch, transformers, sentence-transformers, ChromaDB, BERTopic |
-| `llm` | litellm, OpenAI, gpt-researcher (LLM review, debate, deep research) |
-| `altdata` | Google Trends, Reddit adapters |
-| `tuning` | Optuna |
-| `finagg` | SEC EDGAR fundamentals |
+| `nlp` | torch, transformers, sentence-transformers, ChromaDB (sentiment, filings, transcripts) |
+| `llm` | litellm, gpt-researcher (LLM review, deep research) |
 | `dashboard` | Streamlit |
-| `research` | matplotlib, tqdm, pandera and other script-only tools |
+| `research` | matplotlib, aiohttp (news scrapers) |
 
 ### Common commands
 
@@ -190,20 +187,19 @@ dashboard on port 8501. See [scripts/README.md](scripts/README.md) for every scr
 
 ```
 src/auto_researcher/
-├── backtest/      # walk_forward.py (harness), event_strategy.py, baselines, metrics, runner
-├── validation/    # Purged splits, CPCV, deflated Sharpe, event-date checks
-├── features/      # Technical, alpha factors, earnings events, news signals, targets
-├── data/          # Prices (with offline cache), universes, news scraper, vector stores,
-│                  # fundamentals sources, alt-data adapters
-├── agents/        # Earnings, fundamental, insider, sentiment, SEC filing, thematic,
-│                  # LLM review, AlphaAgents debate, deep research
+├── backtest/      # walk_forward.py (harness), event_strategy.py, baselines, metrics
+├── validation/    # Purged splits, deflated Sharpe, event-date checks
+├── features/      # Technical, alpha factors, earnings events, news signals, targets,
+│                  # point-in-time fundamental factors, valuation and reverse DCF
+├── data/          # Prices (with offline cache), SEC point-in-time fundamentals,
+│                  # FMP / Alpha Vantage earnings, news scraper, vector stores
+├── agents/        # Sentiment, LLM review, deep research
 ├── models/        # PEAD, quality-value, insider cluster, filing tone, earnings-call quality,
-│                  # sector momentum and rotation, XGBoost/LightGBM/Transformer/GNN rankers
+│                  # sector momentum and rotation, early adopter, XGBoost ranker, growth forecast
 ├── screening.py   # Stage 1 screen
-├── composite.py   # Evidence-based agent weights
-└── risk/          # Position sizing, exposure limits, drawdown control, attribution
-scripts/           # Studies, pipeline and data ingestion (see scripts/README.md)
-tests/             # 635 tests, including leakage, causality and accounting checks
+└── composite.py   # Evidence-based agent weights
+scripts/           # Pipeline, research studies and data ingestion (see scripts/README.md)
+tests/             # Unit, leakage, causality and accounting tests
 docs/              # AUDIT.md and the research reports (docs/results/)
 app.py             # Streamlit dashboard
 ```

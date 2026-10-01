@@ -105,24 +105,6 @@ def test_compute_ic_weights_lags_by_horizon() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_causal_regime_assigner_only_uses_past() -> None:
-    from auto_researcher.models.regimes import CausalRegimeAssigner
-
-    # Build two prefix-matching benchmark series that diverge after day 600.
-    idx = pd.date_range("2018-01-02", periods=1000, freq="B")
-    base = pd.Series(np.cumprod(1.0 + 0.0003 * np.ones(1000)), index=idx)
-
-    mirror = base.copy()
-    mirror.iloc[600:] *= np.linspace(1.0, 0.5, 400)  # crash in the tail
-
-    probe_date = idx[500]  # well before the divergence
-
-    assigner_base = CausalRegimeAssigner(base)
-    assigner_mirror = CausalRegimeAssigner(mirror)
-
-    # Because both series are identical through probe_date, the regime label
-    # there must be identical — the future crash must not bleed back.
-    assert assigner_base.assign(probe_date) == assigner_mirror.assign(probe_date)
 
 
 # ---------------------------------------------------------------------------
@@ -130,41 +112,8 @@ def test_causal_regime_assigner_only_uses_past() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_purged_time_series_splits_respects_purge_gap() -> None:
-    from auto_researcher.models.hyperparam_tuner import _purged_time_series_splits
-
-    dates = pd.DatetimeIndex(pd.date_range("2023-01-02", periods=500, freq="B"))
-
-    splits = _purged_time_series_splits(
-        dates=dates,
-        n_samples=len(dates),
-        n_splits=3,
-        purge_days=21,
-        embargo_days=0,
-    )
-
-    assert splits, "expected at least one inner split"
-    for train_idx, val_idx in splits:
-        train_max_date = dates[train_idx.max()]
-        val_min_date = dates[val_idx.min()]
-        gap = (val_min_date - train_max_date).days
-        assert gap >= 21, (
-            f"purged split leaked: train ends {train_max_date.date()}, "
-            f"val starts {val_min_date.date()} — gap {gap}d < 21d purge"
-        )
 
 
-def test_groups_from_dates_are_per_date() -> None:
-    from auto_researcher.models.hyperparam_tuner import _groups_from_dates
-
-    dates = pd.DatetimeIndex(
-        ["2023-01-02", "2023-01-02", "2023-01-03", "2023-01-04", "2023-01-04", "2023-01-04"]
-    )
-    indices = np.arange(len(dates))
-    groups = _groups_from_dates(dates, indices)
-    assert list(groups) == [2, 1, 3], (
-        "Expected per-date group sizes [2, 1, 3], got " + repr(groups)
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -172,49 +121,3 @@ def test_groups_from_dates_are_per_date() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_fundamentals_alignment_enforces_filing_lag() -> None:
-    from auto_researcher.features.feature_pipeline import (
-        _align_fundamentals_to_prices,
-    )
-
-    price_dates = pd.date_range("2023-01-03", "2023-09-29", freq="B")
-    prices = pd.DataFrame(
-        np.ones((len(price_dates), 1)),
-        index=price_dates,
-        columns=["AAA"],
-    )
-
-    # Fundamentals stamped on fiscal-quarter-end, shape (date, ticker).
-    fund_long = pd.DataFrame(
-        {"pe_ratio": [10.0, 11.0, 12.0]},
-        index=pd.MultiIndex.from_tuples(
-            [
-                (pd.Timestamp("2023-03-31"), "AAA"),
-                (pd.Timestamp("2023-06-30"), "AAA"),
-                (pd.Timestamp("2023-09-30"), "AAA"),
-            ],
-            names=["date", "ticker"],
-        ),
-    )
-
-    aligned = _align_fundamentals_to_prices(fund_long, prices, filing_lag_days=45)
-
-    # Convert to a ticker-level slice we can probe: expected columns are
-    # MultiIndex (ticker, factor) or similar — just find the matching column.
-    aaa_cols = [c for c in aligned.columns if "AAA" in str(c)]
-    assert aaa_cols, f"Expected an AAA column after alignment, got {aligned.columns}"
-    series = aligned[aaa_cols[0]]
-
-    # On 2023-04-03 (Mon), only 3 calendar days after fiscal end — filing lag
-    # should still mask the value.
-    early = pd.Timestamp("2023-04-03")
-    if early in series.index:
-        assert pd.isna(series.loc[early]) or series.loc[early] != 10.0, (
-            f"Fundamentals leaked through filing lag: got {series.loc[early]} "
-            f"on {early.date()} from fiscal-end 2023-03-31."
-        )
-
-    # 60 days later (well past the 45-day lag), the value should be visible.
-    late = pd.Timestamp("2023-06-01")
-    if late in series.index:
-        assert series.loc[late] == 10.0

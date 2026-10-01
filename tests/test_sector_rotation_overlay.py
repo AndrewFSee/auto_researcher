@@ -323,11 +323,11 @@ class TestModuleImport:
     """Test that the module is importable from the package."""
 
     def test_import_from_models(self):
-        from auto_researcher.models import SectorRotationOverlay
+        from auto_researcher.models.sector_rotation_overlay import SectorRotationOverlay
         assert SectorRotationOverlay is not None
 
     def test_import_dataclasses(self):
-        from auto_researcher.models import SectorBreadth, SectorTilt, OverlaySnapshot
+        from auto_researcher.models.sector_rotation_overlay import SectorBreadth, SectorTilt, OverlaySnapshot
         assert SectorBreadth is not None
         assert SectorTilt is not None
         assert OverlaySnapshot is not None

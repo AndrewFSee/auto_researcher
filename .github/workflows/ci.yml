@@ -41,7 +41,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
-      # Tests that need optional heavy dependencies (torch, chromadb, optuna,
+      # Tests that need optional heavy dependencies (torch, chromadb,
       # litellm, ...) skip themselves when those packages are absent.
       - name: Run tests
         run: pytest -q --cov=auto_researcher --cov-report=term --cov-report=xml

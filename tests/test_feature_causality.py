@@ -13,9 +13,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from auto_researcher.config import FeatureConfig
 from auto_researcher.features.enhanced import EnhancedFeatureConfig, compute_all_enhanced_features
-from auto_researcher.features.feature_pipeline import build_feature_matrix
 
 
 def _prices(n_days: int = 420, n_stocks: int = 12, seed: int = 3) -> pd.DataFrame:
@@ -49,15 +47,6 @@ def test_enhanced_features_are_causal(cross_sec_norm: bool) -> None:
     pd.testing.assert_frame_equal(base.loc[:cut], moved.loc[:cut])
 
 
-def test_library_feature_matrix_is_causal() -> None:
-    prices = _prices()
-    cut = prices.index[330]
-    cfg = FeatureConfig(include_fundamentals=False, include_sentiment=False)
-
-    base = build_feature_matrix(prices, cfg)
-    moved = build_feature_matrix(_perturb_after(prices, cut), cfg)
-
-    pd.testing.assert_frame_equal(base.loc[:cut], moved.loc[:cut])
 
 
 def test_alpha_factors_are_causal() -> None:

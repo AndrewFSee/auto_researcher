@@ -166,12 +166,14 @@ found no edge in the agent's FinBERT signal.
    forecasts, and its valuation gap was the strongest signal tested but did
    not clear the pre-registered bar against a naive-forecast gap. Re-test the
    gap once more holdout accrues (no changes to the model) before relying on
-   it. The legacy `data/finagg_fundamentals.py` is not point-in-time and should
-   not feed backtests.
+   it. The legacy, non-point-in-time `data/finagg_fundamentals.py` has been removed.
 7. **Formatting.** Run `ruff format` in a dedicated formatting-only commit so it
    does not bury functional changes.
-8. **Commit history.** The Phase 0-5 work and this audit are uncommitted;
-   committing them separately keeps the history reviewable.
+8. **Commit history.** Done: the audit, the data and fundamentals work, and a
+   cleanup that removed the legacy ML stack (backtest runner, CLI, GBDT/GNN/
+   Transformer/ensemble rankers, hyperparameter tuner, regime and risk
+   modules, alt-data adapters, unused agents and pre-audit scripts) are
+   separate commits; anything removed is in the history before the cleanup.
 
 ## Reproducing the results
 

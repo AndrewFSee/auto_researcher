@@ -28,7 +28,6 @@ dependencies = [
     "scipy>=1.11",
     "scikit-learn>=1.3",
     "xgboost>=2.0",
-    "lightgbm>=4.0",
     "yfinance>=0.2.40",
     "pyarrow>=14",
     "requests>=2.31",
@@ -42,28 +41,13 @@ nlp = [
     "transformers>=4.36",
     "sentence-transformers>=2.2",
     "chromadb>=0.4",
-    "bertopic>=0.16",
     "nltk>=3.8",
     "beautifulsoup4>=4.12",
 ]
 # LLM-backed agents (review, debate, deep research)
 llm = [
     "litellm>=1.30",
-    "openai>=1.0",
     "gpt-researcher>=0.8",
-]
-# Public alternative-data adapters
-altdata = [
-    "pytrends>=4.9",
-    "praw>=7.7",
-]
-# Hyperparameter search
-tuning = [
-    "optuna>=3.4",
-]
-# SEC EDGAR fundamentals
-finagg = [
-    "finagg>=0.4.0",
 ]
 # Streamlit dashboard
 dashboard = [
@@ -72,10 +56,7 @@ dashboard = [
 # Extras used only by research scripts
 research = [
     "matplotlib>=3.8",
-    "tqdm>=4.66",
-    "joblib>=1.3",
     "aiohttp>=3.9",
-    "pandera>=0.17",
 ]
 dev = [
     "pytest>=7.4",
@@ -85,11 +66,10 @@ dev = [
     "types-requests",
 ]
 all = [
-    "auto-researcher[nlp,llm,altdata,tuning,finagg,dashboard,research,dev]",
+    "auto-researcher[nlp,llm,dashboard,research,dev]",
 ]
 
 [project.scripts]
-auto-researcher = "auto_researcher.cli.main:main"
 auto-researcher-screen = "auto_researcher.screening:main"
 
 [tool.setuptools.packages.find]
