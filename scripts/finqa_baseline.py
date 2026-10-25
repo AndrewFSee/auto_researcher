@@ -37,6 +37,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
+from scipy.stats import binomtest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
@@ -223,7 +224,45 @@ def summarise(path: Path) -> dict:
     }
 
 
-def write_report(runs_dir: Path, report: Path) -> None:
+def finetune_section(models_dir: Path) -> list[str]:
+    """Training details for each fine-tuned model, from the run_info.json the notebook writes."""
+    pct = "{:.1%}".format
+    lines: list[str] = []
+    for path in sorted(models_dir.glob("*/run_info.json")):
+        info = json.loads(path.read_text(encoding="utf-8"))
+        if info.get("smoke"):
+            continue
+        h = info["hyperparameters"]
+        evals = {f"step{e['step']}": e for e in info["log_history"] if "eval_loss" in e}
+        lines += [
+            f"## Fine-tune: `{path.parent.name}`",
+            "",
+            f"Trained with `notebooks/finqa_qlora_colab.ipynb` on an {info['versions']['gpu']}",
+            f"({info['log_history'][-1].get('train_runtime', 0) / 3600:.1f} h): `{info['base_model']}` in 4-bit NF4,",
+            f"LoRA r={h['lora_r']}, alpha={h['lora_alpha']}, dropout={h['lora_dropout']} on {h['target_modules']},",
+            f"learning rate {h['lr']} ({h['scheduler']}), effective batch {h['batch'] * h['grad_accum']},",
+            f"{h['epochs']} epochs ({h['max_steps']} steps) on all {info['n_train']:,} training questions, loss on",
+            "the program only. Prompts are rendered exactly as Ollama renders them. Checkpoints",
+            f"scored on {info['dev_results']['base']['n']} dev questions; the best "
+            f"(`{info['best_checkpoint']}`) was merged into the bf16 base,",
+            "quantized to Q4_K_M and served with `qwen3:8b`'s own Modelfile.",
+            f"Code at commit `{info['repo_commit'][:10]}`; prompt sha256 `{info['prompt_sha256'][:12]}`.",
+            "",
+            "| Dev (4-bit training model) | Epoch | Dev loss | Exact | Within 1% | Failed |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        rows = [("untuned", info["dev_results"]["base"], None)]
+        rows += [(k, v, evals.get(k)) for k, v in info["dev_results"]["checkpoints"].items()]
+        for name, r, ev in rows:
+            epoch = f"{ev['epoch']:.2f}" if ev else "0"
+            loss = f"{ev['eval_loss']:.4f}" if ev else ""
+            lines.append(f"| {name} | {epoch} | {loss} | {pct(r['exact'])} | {pct(r['tolerant'])} | "
+                         f"{pct(r['failed'])} |")
+        lines.append("")
+    return lines
+
+
+def write_report(runs_dir: Path, report: Path, models_dir: Path) -> None:
     summaries = [summarise(p) for p in sorted(runs_dir.glob("*.jsonl"))]
     if not summaries:
         raise SystemExit(f"no run files in {runs_dir}")
@@ -231,7 +270,7 @@ def write_report(runs_dir: Path, report: Path) -> None:
 
     pct = "{:.1%}".format
     lines = [
-        "# FinQA baseline (before fine-tuning)",
+        "# FinQA: baseline and QLoRA fine-tune",
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/finqa_baseline.py`.",
         "",
@@ -239,7 +278,9 @@ def write_report(runs_dir: Path, report: Path) -> None:
         "annual report. The model sees the whole page (text and table, not just the gold",
         "facts) and, in the program modes, writes a FinQA program that is executed by",
         "`auto_researcher.llm.finqa` (the executor reproduces 100% of gold answers on dev",
-        "and test from the gold programs). Greedy decoding, thinking disabled.",
+        "and test from the gold programs). Greedy decoding, thinking disabled, all models",
+        "served by Ollama at Q4_K_M on the laptop GPU. `qwen3_8b` is the untuned model;",
+        "`qwen3-finqa` is it after QLoRA fine-tuning (see below).",
         "",
         "* **Exact**: official execution accuracy (answer to 5 decimals).",
         "* **Scale**: also accepts a x100 mismatch (14.5 vs 0.145). FinQA's labels mix",
@@ -269,15 +310,18 @@ def write_report(runs_dir: Path, report: Path) -> None:
         cells = " | ".join(f"{pct(b[k]['scale'])} (n={b[k]['n']})" for k in ("1 step", "2 steps", "3+ steps", "table op"))
         lines.append(f"| {s['model']} | {s['mode']} | {cells} |")
     lines += ["", "## Paired comparison (within 1%, same questions)", "",
-              "| Model | A | B | Both right | Only A | Only B | Neither |",
-              "| --- | --- | --- | ---: | ---: | ---: | ---: |"]
+              "McNemar exact test on the questions exactly one of the two gets right.", "",
+              "| A | B | Both right | Only A | Only B | Neither | McNemar p |",
+              "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
     for a, b in itertools.combinations(summaries, 2):
-        if (a["model"], a["split"]) != (b["model"], b["split"]):
+        if a["split"] != b["split"] or a["n"] != b["n"]:
             continue
         ra, rb = set(a["correct_ids"]), set(b["correct_ids"])
+        only_a, only_b = len(ra - rb), len(rb - ra)
+        p = binomtest(only_a, only_a + only_b, 0.5).pvalue if only_a + only_b else 1.0
         lines.append(
-            f"| {a['model']} | {a['mode']} | {b['mode']} | {len(ra & rb)} | {len(ra - rb)} | "
-            f"{len(rb - ra)} | {a['n'] - len(ra | rb)} |"
+            f"| {a['model']} {a['mode']} | {b['model']} {b['mode']} | {len(ra & rb)} | {only_a} | "
+            f"{only_b} | {a['n'] - len(ra | rb)} | {p:.1g} |"
         )
     lines += ["", "## Why program answers miss (share of all questions)", "",
               "| Model | Mode | " + " | ".join(MISS_TYPES) + " |",
@@ -291,7 +335,28 @@ def write_report(runs_dir: Path, report: Path) -> None:
         "\"Sign flipped\" is a subtraction in the wrong direction; \"right numbers, wrong",
         "formula\" means every number in the gold program appears in the model's program.",
         "",
-        "## Findings (qwen3:8b, before fine-tuning)",
+        *finetune_section(models_dir),
+        "## Findings",
+        "",
+        "Fine-tuning (`qwen3-finqa`):",
+        "",
+        "* QLoRA on the 6,251 training programs lifts execution accuracy from 53.6% to",
+        "  76.5% (within 1%: 59.2% to 79.0%) with the same prompt, and no answer fails to",
+        "  parse or execute (4.7% before). It also beats the untuned model's free-form",
+        "  answers (71.4% within 1%; 144 questions only the fine-tune gets right vs 57,",
+        "  p < 1e-9), so programs now win on accuracy as well as auditability.",
+        "* The gain is largest where the untuned model was weakest: 3+ step questions",
+        "  (26% to 63%). Wrong numbers fall from 9.0% to 2.1% of questions; formula",
+        "  errors with the right numbers (8.9%) are now the main miss: unit scaling",
+        "  (thousands vs millions), the wrong base year in a change, and some gold labels",
+        "  that are themselves wrong. One miss reproduces a nonsensical pattern found in",
+        "  FinQA's own labels: fine-tuning learns the dataset's noise along with its format.",
+        "* 76.5% execution accuracy is above the published FinQANet (61.2%) and APOLLO",
+        "  (71.1%) results and below human experts (91.2%). The contamination caveat below",
+        "  applies to that comparison, not to the before/after one: both runs share the",
+        "  same base model.",
+        "",
+        "Untuned model (`qwen3_8b`):",
         "",
         "* Writing the program alone (`program`) scores 58% scale-tolerant, roughly the",
         "  general-crowd level and below FinQANet (61%). Reasoning first (`cot_program`)",
@@ -316,6 +381,10 @@ def write_report(runs_dir: Path, report: Path) -> None:
         "  must find that page first, which adds its own errors.",
         "* A correct number from a wrong program still counts as correct here; program",
         "  accuracy (matching the reference program) is not measured.",
+        "* One training run (one seed). The checkpoint was chosen on 300 dev questions;",
+        "  the test set was used once, for the numbers above.",
+        "* Exact reruns can differ by a question or two: GPU arithmetic varies slightly",
+        "  when Ollama reuses a cached prompt prefix.",
         "",
     ]
     report.write_text("\n".join(lines), encoding="utf-8")
@@ -335,11 +404,13 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=ROOT / "data" / "finqa")
     parser.add_argument("--runs-dir", type=Path, default=ROOT / "data" / "finqa" / "runs")
     parser.add_argument("--report", type=Path, default=ROOT / "docs" / "results" / "finqa_baseline.md")
+    parser.add_argument("--models-dir", type=Path, default=ROOT / "data" / "finqa" / "models",
+                        help="fine-tuned models with the notebook's run_info.json")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
     if not args.report_only:
         evaluate(args)
-    write_report(args.runs_dir, args.report)
+    write_report(args.runs_dir, args.report, args.models_dir)
 
 
 if __name__ == "__main__":
