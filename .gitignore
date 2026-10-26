@@ -173,3 +173,6 @@ desktop.ini
 .cache/
 tmp/
 temp/
+
+# Reference books and papers (copyrighted, local only)
+docs/reference/
