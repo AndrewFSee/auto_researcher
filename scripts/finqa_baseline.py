@@ -318,6 +318,27 @@ def filings_closing(data_file: Path, summaries: list[dict], runs_dir: Path) -> l
         lines.append(f"| {s['model']} | {s['mode']} | " + " | ".join(cells) + " |")
     return lines + [
         "",
+        "## Findings (980 questions, 10-Ks filed 2025-26)",
+        "",
+        "* The FinQA fine-tune carries over to filings the model has never seen: 95.3% within",
+        "  1% against 90.7% for the untuned model writing programs (76 vs 31 discordant",
+        "  questions, p = 2e-5) and 90.5% for its free-form answers (75 vs 28, p = 4e-6).",
+        "  No answer fails to run (0.9% before). The gain is smaller than on FinQA (+5 points",
+        "  vs +20) because these questions are easier: the untuned model already gets 90%.",
+        "* The untuned model's main error here is reading \"change\" as a percentage change",
+        "  (right subtraction, then a division: 20 of its 34 misses on `change`); the",
+        "  fine-tune learned FinQA's convention that a change is a difference (6 misses).",
+        "* Fine-tuning made one thing worse: three-year averages (90.6% vs 94.9% untuned).",
+        "  15 of its 24 misses are the same broken program, `add(a, b), add(c, #0),",
+        "  add(#1, const_3), divide(#2, const_2)` (add 3, then halve), which comes from FinQA's",
+        "  own labels: 34 of the 599 'average' questions in FinQA's training set are labelled",
+        "  that way (8 in dev, 2 in test, so FinQA's test score barely shows it). The model",
+        "  learned the label noise along with the format. Repairing those labels and",
+        "  retraining is the obvious fix.",
+        "* Free-form answers and programs tie for the untuned model (p = 0.9), unlike on",
+        "  FinQA, where free-form was 12 points better: with simple questions, fluency in the",
+        "  FinQA language matters less.",
+        "",
         "## Caveats",
         "",
         "* Templated questions (change, percentage change, three-year average, portion of a",
@@ -377,7 +398,8 @@ def write_report(runs_dir: Path, report: Path, models_dir: Path, kind: str = "fi
               "| --- | --- | ---: | ---: | ---: | ---: |"]
     for s in summaries:
         b = s["buckets"]
-        cells = " | ".join(f"{pct(b[k]['scale'])} (n={b[k]['n']})" for k in ("1 step", "2 steps", "3+ steps", "table op"))
+        cells = " | ".join(f"{pct(b[k]['scale'])} (n={b[k]['n']})" if b[k]["n"] else ""
+                           for k in ("1 step", "2 steps", "3+ steps", "table op"))
         lines.append(f"| {s['model']} | {s['mode']} | {cells} |")
     lines += ["", "## Paired comparison (within 1%, same questions)", "",
               "McNemar exact test on the questions exactly one of the two gets right.", "",
