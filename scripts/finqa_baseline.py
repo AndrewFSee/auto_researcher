@@ -262,14 +262,78 @@ def finetune_section(models_dir: Path) -> list[str]:
     return lines
 
 
-def write_report(runs_dir: Path, report: Path, models_dir: Path) -> None:
-    summaries = [summarise(p) for p in sorted(runs_dir.glob("*.jsonl"))]
-    if not summaries:
-        raise SystemExit(f"no run files in {runs_dir}")
-    report.with_suffix(".json").write_text(json.dumps(summaries, indent=2, default=str), encoding="utf-8")
+SCORES = [
+    "* **Exact**: official execution accuracy (answer to 5 decimals).",
+    "* **Scale**: also accepts a x100 mismatch (14.5 vs 0.145). FinQA's labels mix",
+    "  ratios and percentages (about 10% of test programs multiply by 100), so this",
+    "  is the fairer number for comparing prompts.",
+    "* **Within 1%**: scale-tolerant and within 1% (the book's `validate_calculation`",
+    "  default); used for `direct`, where the model rounds.",
+    "* **Failed**: no parseable answer, or the program did not execute.",
+    "",
+]
 
+
+def filings_intro(data_file: Path) -> list[str]:
+    summary_path = data_file.with_suffix(".summary.json")
+    s = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+    return [
+        "# Filing QA: FinQA-style questions on recent 10-K filings",
+        "",
+        f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/finqa_baseline.py`; questions built by",
+        f"`scripts/build_filing_qa.py` ({s.get('questions', '?')} questions from {s.get('filings', '?')} "
+        f"{'/'.join(s.get('forms', ['10-K']))} filings of",
+        f"{s.get('companies', '?')} companies filed from {s.get('filed_from', '?')}, at most "
+        f"{s.get('per_filing', '?')} per filing).",
+        "",
+        "The filings are S&P 500 annual reports filed after the base model's training data,",
+        "read from the sentiq project's EDGAR store. Each table with inline-XBRL facts becomes",
+        "a FinQA-style page (text before, table, text after, in FinQA's formatting), and a",
+        "question is asked only where the tags fix the answer: each number is one tagged fact",
+        "on the page, its fiscal year comes from the XBRL context and is the year shown above",
+        "its column, and the numbers compared share concept, unit and dimensions. Gold",
+        "programs use the numbers as displayed and run on the same executor that scores the",
+        "models. Same prompts, options and scoring as the FinQA evaluation",
+        "(`docs/results/finqa_baseline.md`).",
+        "",
+        *SCORES,
+    ]
+
+
+def filings_closing(data_file: Path, summaries: list[dict], runs_dir: Path) -> list[str]:
     pct = "{:.1%}".format
-    lines = [
+    templates = {r["id"]: r["meta"]["template"]
+                 for r in json.loads(data_file.read_text(encoding="utf-8"))}
+    names = sorted(set(templates.values()))
+    lines = ["## By question template (within 1%)", "",
+             "| Model | Mode | " + " | ".join(names) + " |",
+             "| --- | --- | " + " | ".join("---:" for _ in names) + " |"]
+    for s in summaries:
+        path = runs_dir / f"{s['model']}__{s['split']}__{s['mode']}.jsonl"
+        recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        cells = []
+        for name in names:
+            rows = [r for r in recs if templates.get(r["id"]) == name]
+            cells.append(f"{pct(sum(r['tolerant'] for r in rows) / len(rows))} (n={len(rows)})" if rows else "")
+        lines.append(f"| {s['model']} | {s['mode']} | " + " | ".join(cells) + " |")
+    return lines + [
+        "",
+        "## Caveats",
+        "",
+        "* Templated questions (change, percentage change, three-year average, portion of a",
+        "  total) are more uniform than FinQA's: they test reading the right cells of a real",
+        "  filing and combining them correctly, not open-ended analysis or facts stated only",
+        "  in the text.",
+        "* The model is handed the page that holds the answer; finding that page in a full",
+        "  10-K (retrieval) is not tested here.",
+        "* Questions use the table's own row labels, which can be terse (\"iphone\").",
+        "* Pages are formatted like FinQA's, which the fine-tuned model was trained on.",
+        "",
+    ]
+
+
+def finqa_intro() -> list[str]:
+    return [
         "# FinQA: baseline and QLoRA fine-tune",
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/finqa_baseline.py`.",
@@ -282,17 +346,23 @@ def write_report(runs_dir: Path, report: Path, models_dir: Path) -> None:
         "served by Ollama at Q4_K_M on the laptop GPU. `qwen3_8b` is the untuned model;",
         "`qwen3-finqa` is it after QLoRA fine-tuning (see below).",
         "",
-        "* **Exact**: official execution accuracy (answer to 5 decimals).",
-        "* **Scale**: also accepts a x100 mismatch (14.5 vs 0.145). FinQA's labels mix",
-        "  ratios and percentages (about 10% of test programs multiply by 100), so this",
-        "  is the fairer number for comparing prompts.",
-        "* **Within 1%**: scale-tolerant and within 1% (the book's `validate_calculation`",
-        "  default); used for `direct`, where the model rounds.",
-        "* **Failed**: no parseable answer, or the program did not execute.",
-        "",
+        *SCORES,
         "Published reference points on the test set (execution accuracy): FinQANet 61.2%,",
         "APOLLO ensemble 71.1%, human experts 91.2%, general crowd 50.7%.",
         "",
+    ]
+
+
+def write_report(runs_dir: Path, report: Path, models_dir: Path, kind: str = "finqa",
+                 data_file: Path | None = None) -> None:
+    summaries = [summarise(p) for p in sorted(runs_dir.glob("*.jsonl"))]
+    if not summaries:
+        raise SystemExit(f"no run files in {runs_dir}")
+    report.with_suffix(".json").write_text(json.dumps(summaries, indent=2, default=str), encoding="utf-8")
+
+    pct = "{:.1%}".format
+    lines = finqa_intro() if kind == "finqa" else filings_intro(data_file)
+    lines += [
         "| Model | Split | Mode | N | Exact | Scale | Within 1% | Failed | s/question | Output tokens |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
@@ -335,6 +405,15 @@ def write_report(runs_dir: Path, report: Path, models_dir: Path) -> None:
         "\"Sign flipped\" is a subtraction in the wrong direction; \"right numbers, wrong",
         "formula\" means every number in the gold program appears in the model's program.",
         "",
+    ]
+    lines += (finqa_closing(models_dir) if kind == "finqa"
+              else filings_closing(data_file, summaries, runs_dir))
+    report.write_text("\n".join(lines), encoding="utf-8")
+    logger.info("wrote %s", report)
+
+
+def finqa_closing(models_dir: Path) -> list[str]:
+    return [
         *finetune_section(models_dir),
         "## Findings",
         "",
@@ -387,8 +466,6 @@ def write_report(runs_dir: Path, report: Path, models_dir: Path) -> None:
         "  when Ollama reuses a cached prompt prefix.",
         "",
     ]
-    report.write_text("\n".join(lines), encoding="utf-8")
-    logger.info("wrote %s", report)
 
 
 def main() -> None:
@@ -406,11 +483,14 @@ def main() -> None:
     parser.add_argument("--report", type=Path, default=ROOT / "docs" / "results" / "finqa_baseline.md")
     parser.add_argument("--models-dir", type=Path, default=ROOT / "data" / "finqa" / "models",
                         help="fine-tuned models with the notebook's run_info.json")
+    parser.add_argument("--kind", choices=["finqa", "filings"], default="finqa",
+                        help="which report to write: FinQA, or questions from build_filing_qa.py")
     parser.add_argument("--report-only", action="store_true")
     args = parser.parse_args()
     if not args.report_only:
         evaluate(args)
-    write_report(args.runs_dir, args.report, args.models_dir)
+    write_report(args.runs_dir, args.report, args.models_dir, args.kind,
+                 args.data_dir / f"{args.split}.json")
 
 
 if __name__ == "__main__":
