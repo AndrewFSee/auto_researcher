@@ -87,3 +87,23 @@ def test_max_requests_budget(repo_tmp_path):
     sess = FakeSession(lambda sym, n: FakeResponse(200, []))
     s = download_fmp_earnings(list("ABCDE"), "k", repo_tmp_path, max_requests=3, pause=0, session=sess)
     assert len(sess.calls) == 3 and s.remaining == ["D", "E"]
+
+
+def test_repeated_network_errors_stop_cleanly(repo_tmp_path, monkeypatch):
+    import requests
+
+    monkeypatch.setattr("auto_researcher.data.fmp_earnings.time.sleep", lambda s: None)
+
+    class DownSession:
+        def __init__(self):
+            self.calls = 0
+
+        def get(self, url, params, timeout):
+            self.calls += 1
+            if params["symbol"] == "B":
+                raise requests.Timeout("timed out")
+            return FakeResponse(200, [dict(ROWS[0], symbol=params["symbol"])])
+
+    sess = DownSession()
+    s = download_fmp_earnings(["A", "B", "C"], "k", repo_tmp_path, pause=0, session=sess)
+    assert s.downloaded == ["A"] and s.remaining == ["B", "C"] and sess.calls == 3

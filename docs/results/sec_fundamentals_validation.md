@@ -1,6 +1,6 @@
 # SEC point-in-time fundamentals: validation
 
-Generated 2026-10-01 by `scripts/build_fundamentals.py`. Companies with facts: 503 of 503; 601,678 point-in-time values.
+Generated 2026-10-24 by `scripts/build_fundamentals.py`. Companies with facts: 503 of 503; 601,678 point-in-time values.
 
 ## Timing
 
@@ -38,11 +38,12 @@ Latest-reported SEC figures vs. Yahoo's annual statements (DefeatBeta), matched 
 
 ## Share counts
 
-SEC share count (cover page, else diluted average; split-adjusted) vs. Yahoo's latest, 503 companies compared. Outside 0.80–1.25×: 7. These are excluded from market-cap ratios (`data/research_cache/sec_share_mismatch.json`); most are multi-class companies.
+SEC share count (cover page, else diluted average; split-adjusted) vs. Yahoo's latest, 503 companies compared. Outside 0.80–1.25×: 8. These are excluded from market-cap ratios (`data/research_cache/sec_share_mismatch.json`); most are multi-class companies.
 
 | Symbol | SEC / Yahoo |
 | --- | ---: |
 | BX | 0.603 |
+| CTVA | 6.67 |
 | ARES | nan |
 | BRK-B | nan |
 | ERIE | nan |

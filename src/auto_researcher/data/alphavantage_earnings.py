@@ -125,10 +125,17 @@ def download_av_earnings(
         if requests_made >= max_requests:
             summary.remaining = todo[i:n_new]
             break
-        body = None
+        body, resp, network_error = None, None, None
         for attempt in range(2):
-            resp = session.get(AV_URL, params={"function": "EARNINGS", "symbol": sym,
-                                               "apikey": api_key}, timeout=30)
+            try:
+                resp = session.get(AV_URL, params={"function": "EARNINGS", "symbol": sym,
+                                                   "apikey": api_key}, timeout=30)
+            except requests.RequestException as exc:  # dropped connection, timeout, DNS
+                network_error = exc
+                if attempt == 0:
+                    time.sleep(max(pause, 5.0))
+                continue
+            network_error = None
             requests_made += 1
             try:
                 body = resp.json()
@@ -138,6 +145,10 @@ def download_av_earnings(
                 break
             if attempt == 0:
                 time.sleep(max(pause, 2.0))
+        if network_error is not None:
+            summary.remaining = todo[i:n_new]
+            logger.warning("Network error for %s (%s); stopping, the next run resumes", sym, network_error)
+            break
         if _throttle_note(body):
             summary.quota_hit = True
             summary.remaining = todo[i:n_new]
@@ -147,6 +158,12 @@ def download_av_earnings(
         if isinstance(body, dict) and body.get("quarterlyEarnings"):
             parse_av_earnings(body, sym).to_parquet(cache_dir / f"{sym}.parquet")
             summary.downloaded.append(sym)
+        elif not isinstance(body, dict) or getattr(resp, "status_code", 200) != 200:
+            # Not JSON (e.g. an HTML error page) or an HTTP error: transient, not "unknown symbol".
+            logger.warning("Unexpected reply for %s (HTTP %s); will retry next run", sym,
+                           getattr(resp, "status_code", "?"))
+            if i < n_new:
+                summary.remaining.append(sym)
         elif i >= n_new:
             logger.warning("Refresh of %s returned no earnings; keeping the cached file", sym)
         else:

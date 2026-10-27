@@ -114,3 +114,42 @@ def test_spare_budget_refreshes_oldest_stale_files(repo_tmp_path, monkeypatch):
     # New symbol first, then the oldest stale file; C is fresh, A is over budget.
     assert sess.calls == ["D", "B"]
     assert s.remaining == [] and s.downloaded == ["D", "B"]
+
+
+def test_network_errors_retry_then_stop_without_crashing(repo_tmp_path, monkeypatch):
+    import requests
+
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+    calls = []
+
+    class FlakySession:
+        def get(self, url, params, timeout):
+            calls.append(params["symbol"])
+            n = len(calls)
+            if n == 1 or n >= 4:  # A fails once then recovers; C fails twice
+                raise requests.ConnectionError("connection reset")
+            return FakeResponse(PAYLOAD)
+
+    s = download_av_earnings(list("ABCD"), "k", repo_tmp_path, pause=0, session=FlakySession())
+    assert s.downloaded == ["A", "B"] and s.remaining == ["C", "D"] and not s.quota_hit
+    assert not (repo_tmp_path / "_unavailable.json").read_text().count("C")
+
+
+def test_non_json_reply_is_retried_not_marked_unknown(repo_tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+
+    class HtmlResponse:
+        status_code = 503
+
+        def json(self):
+            raise ValueError("not JSON")
+
+    class Session:
+        def get(self, url, params, timeout):
+            return HtmlResponse() if params["symbol"] == "X" else FakeResponse(PAYLOAD)
+
+    s = download_av_earnings(["X", "Y"], "k", repo_tmp_path, pause=0, session=Session())
+    assert s.downloaded == ["Y"] and s.unavailable == [] and s.remaining == ["X"]
+    assert json.loads((repo_tmp_path / "_unavailable.json").read_text()) == []
