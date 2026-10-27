@@ -107,7 +107,20 @@ def download_fmp_earnings(
         if requests_made >= max_requests:
             summary.remaining = todo[i:]
             break
-        resp = session.get(FMP_EARNINGS_URL, params={"symbol": sym, "apikey": api_key}, timeout=30)
+        resp = None
+        for attempt in range(2):
+            try:
+                resp = session.get(FMP_EARNINGS_URL, params={"symbol": sym, "apikey": api_key},
+                                   timeout=30)
+                break
+            except requests.RequestException as exc:  # dropped connection, timeout, DNS
+                logger.warning("Network error for %s (%s)", sym, exc)
+                if attempt == 0:
+                    time.sleep(max(pause, 5.0))
+        if resp is None:
+            summary.remaining = todo[i:]
+            logger.warning("Stopping after repeated network errors; the next run resumes")
+            break
         requests_made += 1
         try:
             body = resp.json()

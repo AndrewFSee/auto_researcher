@@ -260,8 +260,16 @@ def _kind(items: pd.Series) -> pd.Series:
     return items.map({k: v.kind for k, v in ITEMS.items()})
 
 
+def _ns(s: pd.Series) -> pd.Series:
+    """Nanosecond datetimes: pandas 3 defaults to microseconds, and merge_asof
+    refuses keys of different resolutions."""
+    return pd.to_datetime(s).astype("datetime64[ns]")
+
+
 def _nearest(left: pd.DataFrame, right: pd.DataFrame, left_on: str, right_on: str,
              by: list[str], tol_days: int) -> pd.DataFrame:
+    left = left.assign(**{left_on: _ns(left[left_on])})
+    right = right.assign(**{right_on: _ns(right[right_on])})
     return pd.merge_asof(left.sort_values(left_on), right.sort_values(right_on),
                          left_on=left_on, right_on=right_on, by=by, direction="nearest",
                          tolerance=pd.Timedelta(days=tol_days))
@@ -326,6 +334,7 @@ def build_pit_table(facts: pd.DataFrame, mode: str = "first") -> pd.DataFrame:
     table = pd.concat([ttm_flows(sel), _instants(sel), _averages(sel)], ignore_index=True)
     # A value cannot be known before its period ends; drop any tagging errors.
     table = table[table["available_date"] >= table["period_end"]]
+    table = table.assign(period_end=_ns(table["period_end"]), available_date=_ns(table["available_date"]))
     return table.sort_values(["symbol", "item", "period_end"]).reset_index(drop=True)[TABLE_COLUMNS]
 
 
@@ -345,6 +354,8 @@ def fundamentals_asof(
     treated as missing. ``with_available`` adds ``<item>_available`` columns.
     """
     dates = pd.DatetimeIndex(dates).astype("datetime64[ns]")
+    table = table.assign(period_end=_ns(table["period_end"]),
+                         available_date=_ns(table["available_date"]))
     symbols = sorted(table["symbol"].unique()) if symbols is None else list(symbols)
     grid = (pd.MultiIndex.from_product([dates, symbols], names=["date", "symbol"])
             .to_frame(index=False).sort_values("date", kind="stable").reset_index(drop=True))

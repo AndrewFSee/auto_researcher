@@ -7,7 +7,8 @@
     The task runs as the current user, only while logged on (no password is
     stored), without a console window. If the computer is off or asleep at the
     scheduled time, it runs at the next opportunity. Output is appended to
-    data/logs/av_download.log.
+    data/logs/av_download.log. Uses the project's .venv when it exists
+    (override with -Python).
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\schedule_av_download.ps1
@@ -31,9 +32,15 @@ if ($Remove) {
 
 $Root = Split-Path -Parent $PSScriptRoot
 if (-not $Python) {
-    $exe = (Get-Command python -ErrorAction Stop).Source
-    $windowless = Join-Path (Split-Path -Parent $exe) "pythonw.exe"
-    $Python = if (Test-Path $windowless) { $windowless } else { $exe }
+    # Prefer the project's virtual environment; the python on PATH may lack the packages.
+    $venv = Join-Path $Root ".venv\Scripts\pythonw.exe"
+    if (Test-Path $venv) {
+        $Python = $venv
+    } else {
+        $exe = (Get-Command python -ErrorAction Stop).Source
+        $windowless = Join-Path (Split-Path -Parent $exe) "pythonw.exe"
+        $Python = if (Test-Path $windowless) { $windowless } else { $exe }
+    }
 }
 $Script = Join-Path $Root "scripts\download_av_earnings.py"
 $Log = Join-Path $Root "data\logs\av_download.log"

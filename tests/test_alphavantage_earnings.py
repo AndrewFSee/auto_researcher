@@ -77,17 +77,55 @@ def test_throttle_retry_then_quota_stop_and_resume(repo_tmp_path, monkeypatch):
     assert set(load_fmp_earnings(repo_tmp_path)["symbol"]) == set("ABCD")
 
 
-def test_unknown_symbols_are_remembered(repo_tmp_path, monkeypatch):
+INVALID = {"Error Message": "Invalid API call. Please retry or visit the documentation"}
+
+
+def test_unknown_symbols_are_remembered_after_two_days(repo_tmp_path, monkeypatch):
     monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+    day = {"today": "2026-10-26"}
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings._today", lambda: day["today"])
 
     def script(sym, n):
-        return {} if sym == "X" else PAYLOAD
+        return INVALID if sym == "X" else PAYLOAD
 
-    download_av_earnings(["X", "Y"], "k", repo_tmp_path, pause=0, session=FakeSession(script))
-    assert json.loads((repo_tmp_path / "_unavailable.json").read_text()) == ["X"]
-    again = FakeSession(script)
-    download_av_earnings(["X", "Y"], "k", repo_tmp_path, pause=0, session=again)
-    assert again.calls == []
+    def run():
+        sess = FakeSession(script)
+        summary = download_av_earnings(["X", "Y"], "k", repo_tmp_path, pause=0, session=sess)
+        unknown = json.loads((repo_tmp_path / "_unavailable.json").read_text())
+        return sess.calls, summary, unknown
+
+    calls, s, unknown = run()  # day 1: a strike, retried next run
+    assert calls == ["X", "Y"] and unknown == [] and s.unavailable == [] and s.remaining == ["X"]
+    calls, s, unknown = run()  # same day again: not new evidence
+    assert calls == ["X"] and unknown == []
+    day["today"] = "2026-10-27"
+    calls, s, unknown = run()  # a second day: now recorded
+    assert calls == ["X"] and unknown == ["X"] and s.unavailable == ["X"]
+    calls, _, _ = run()
+    assert calls == []
+    assert json.loads((repo_tmp_path / "_unknown_strikes.json").read_text()) == {}
+
+
+def test_a_bad_day_does_not_mark_a_real_symbol(repo_tmp_path, monkeypatch):
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+    day = {"today": "2026-10-26"}
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings._today", lambda: day["today"])
+
+    download_av_earnings(["T"], "k", repo_tmp_path, pause=0,
+                         session=FakeSession(lambda sym, n: INVALID))
+    day["today"] = "2026-10-27"
+    s = download_av_earnings(["T"], "k", repo_tmp_path, pause=0,
+                             session=FakeSession(lambda sym, n: PAYLOAD))
+    assert s.downloaded == ["T"]
+    assert json.loads((repo_tmp_path / "_unavailable.json").read_text()) == []
+    assert json.loads((repo_tmp_path / "_unknown_strikes.json").read_text()) == {}
+
+
+def test_unknown_after_one_day_when_configured(repo_tmp_path, monkeypatch):
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+    s = download_av_earnings(["X"], "k", repo_tmp_path, pause=0, unknown_after_days=1,
+                             session=FakeSession(lambda sym, n: {}))
+    assert s.unavailable == ["X"]
 
 
 def test_max_requests_budget(repo_tmp_path, monkeypatch):
@@ -114,3 +152,42 @@ def test_spare_budget_refreshes_oldest_stale_files(repo_tmp_path, monkeypatch):
     # New symbol first, then the oldest stale file; C is fresh, A is over budget.
     assert sess.calls == ["D", "B"]
     assert s.remaining == [] and s.downloaded == ["D", "B"]
+
+
+def test_network_errors_retry_then_stop_without_crashing(repo_tmp_path, monkeypatch):
+    import requests
+
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+    calls = []
+
+    class FlakySession:
+        def get(self, url, params, timeout):
+            calls.append(params["symbol"])
+            n = len(calls)
+            if n == 1 or n >= 4:  # A fails once then recovers; C fails twice
+                raise requests.ConnectionError("connection reset")
+            return FakeResponse(PAYLOAD)
+
+    s = download_av_earnings(list("ABCD"), "k", repo_tmp_path, pause=0, session=FlakySession())
+    assert s.downloaded == ["A", "B"] and s.remaining == ["C", "D"] and not s.quota_hit
+    assert not (repo_tmp_path / "_unavailable.json").read_text().count("C")
+
+
+def test_non_json_reply_is_retried_not_marked_unknown(repo_tmp_path, monkeypatch):
+    import json
+
+    monkeypatch.setattr("auto_researcher.data.alphavantage_earnings.time.sleep", lambda s: None)
+
+    class HtmlResponse:
+        status_code = 503
+
+        def json(self):
+            raise ValueError("not JSON")
+
+    class Session:
+        def get(self, url, params, timeout):
+            return HtmlResponse() if params["symbol"] == "X" else FakeResponse(PAYLOAD)
+
+    s = download_av_earnings(["X", "Y"], "k", repo_tmp_path, pause=0, session=Session())
+    assert s.downloaded == ["Y"] and s.unavailable == [] and s.remaining == ["X"]
+    assert json.loads((repo_tmp_path / "_unavailable.json").read_text()) == []

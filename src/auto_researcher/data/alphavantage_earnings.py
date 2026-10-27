@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,10 @@ def _throttle_note(body: object) -> str:
     return ""
 
 
+def _today() -> str:
+    return date.today().isoformat()
+
+
 def download_av_earnings(
     symbols: list[str],
     api_key: str,
@@ -80,14 +85,20 @@ def download_av_earnings(
     session: Any = None,
     retry_unavailable: bool = False,
     refresh_after_days: float | None = None,
+    unknown_after_days: int = 2,
 ) -> DownloadSummary:
     """
     Download earnings history for ``symbols`` not yet cached.
 
     Each symbol is saved to ``cache_dir/<SYMBOL>.parquet``; symbols Alpha
-    Vantage does not know are recorded in ``cache_dir/_unavailable.json``. A
-    throttling reply is retried once after a pause; a second one means the daily
-    quota is used up, and the run stops so the next one resumes.
+    Vantage does not know are recorded in ``cache_dir/_unavailable.json`` and
+    not asked for again. Alpha Vantage also answers "Invalid API call" for real
+    symbols on a bad day (on 2026-10-26 for AT&T, T-Mobile, Stryker and five
+    others in one run), so a symbol is only recorded after such replies on
+    ``unknown_after_days`` different days; until then it is retried, and the
+    days are kept in ``cache_dir/_unknown_strikes.json``. A throttling reply is
+    retried once after a pause; a second one means the daily quota is used up,
+    and the run stops so the next one resumes.
 
     With ``refresh_after_days``, budget left after the uncached symbols is
     spent re-downloading cached files older than that, oldest first, so a
@@ -102,6 +113,10 @@ def download_av_earnings(
     unavailable: set[str] = set()
     if marker.exists() and not retry_unavailable:
         unavailable = set(json.loads(marker.read_text()))
+    strikes_path = cache_dir / "_unknown_strikes.json"
+    strikes: dict[str, list[str]] = (json.loads(strikes_path.read_text())
+                                     if strikes_path.exists() else {})
+    today = _today()
 
     summary = DownloadSummary()
     todo, stale = [], []
@@ -125,10 +140,17 @@ def download_av_earnings(
         if requests_made >= max_requests:
             summary.remaining = todo[i:n_new]
             break
-        body = None
+        body, resp, network_error = None, None, None
         for attempt in range(2):
-            resp = session.get(AV_URL, params={"function": "EARNINGS", "symbol": sym,
-                                               "apikey": api_key}, timeout=30)
+            try:
+                resp = session.get(AV_URL, params={"function": "EARNINGS", "symbol": sym,
+                                                   "apikey": api_key}, timeout=30)
+            except requests.RequestException as exc:  # dropped connection, timeout, DNS
+                network_error = exc
+                if attempt == 0:
+                    time.sleep(max(pause, 5.0))
+                continue
+            network_error = None
             requests_made += 1
             try:
                 body = resp.json()
@@ -138,6 +160,10 @@ def download_av_earnings(
                 break
             if attempt == 0:
                 time.sleep(max(pause, 2.0))
+        if network_error is not None:
+            summary.remaining = todo[i:n_new]
+            logger.warning("Network error for %s (%s); stopping, the next run resumes", sym, network_error)
+            break
         if _throttle_note(body):
             summary.quota_hit = True
             summary.remaining = todo[i:n_new]
@@ -147,13 +173,31 @@ def download_av_earnings(
         if isinstance(body, dict) and body.get("quarterlyEarnings"):
             parse_av_earnings(body, sym).to_parquet(cache_dir / f"{sym}.parquet")
             summary.downloaded.append(sym)
+            strikes.pop(sym, None)
+        elif not isinstance(body, dict) or getattr(resp, "status_code", 200) != 200:
+            # Not JSON (e.g. an HTML error page) or an HTTP error: transient, not "unknown symbol".
+            logger.warning("Unexpected reply for %s (HTTP %s); will retry next run", sym,
+                           getattr(resp, "status_code", "?"))
+            if i < n_new:
+                summary.remaining.append(sym)
         elif i >= n_new:
             logger.warning("Refresh of %s returned no earnings; keeping the cached file", sym)
         else:
-            unavailable.add(sym)
-            summary.unavailable.append(sym)
-            logger.info("Alpha Vantage has no earnings for %s: %s", sym, str(body)[:80])
+            days = strikes.setdefault(sym, [])
+            if today not in days:  # a second run on the same day is not new evidence
+                days.append(today)
+            if len(days) >= unknown_after_days:
+                unavailable.add(sym)
+                strikes.pop(sym)
+                summary.unavailable.append(sym)
+                logger.info("Alpha Vantage has no earnings for %s (on %d days): %s", sym,
+                            len(days), str(body)[:80])
+            else:
+                summary.remaining.append(sym)
+                logger.info("No earnings for %s today (%s); will retry on another day", sym,
+                            str(body)[:80])
         time.sleep(pause)
 
     marker.write_text(json.dumps(sorted(unavailable)))
+    strikes_path.write_text(json.dumps(strikes, indent=1, sort_keys=True))
     return summary

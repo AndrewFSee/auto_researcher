@@ -1,16 +1,16 @@
 # Alpha Vantage earnings data validation
 
-Generated 2026-10-01 by `scripts/download_av_earnings.py`. Symbols downloaded: 19 of 503 (unknown to Alpha Vantage: 0). Earliest report: 1996-01-31.
+Generated 2026-10-26 by `scripts/download_av_earnings.py`. Symbols downloaded: 430 of 503 (unknown to Alpha Vantage: 9). Earliest report: 1996-01-31.
 
 ## Report dates
 
-Against SEC-inferred announcement dates (1,504 quarters): same day 85%, within one day 87%, Alpha Vantage two or more days earlier 10.8%.
+Against SEC-inferred announcement dates (34,321 quarters): same day 85%, within one day 91%, Alpha Vantage two or more days earlier 8.1%.
 
-Against Yahoo report dates (`data/sentiment_500.csv`, 279 quarters): same day 94%, within one day 96%.
+Against Yahoo report dates (`data/sentiment_500.csv`, 4,652 quarters): same day 85%, within one day 99%.
 
 ## Consensus vs. Yahoo (2023+)
 
-182 quarters. Estimates within 1 cent: 78%; within 5%: 85%. Rank correlation of surprises: +0.89.
+3,885 quarters. Estimates within 1 cent: 84%; within 5%: 91%. Rank correlation of surprises: +0.92.
 
 ## Cross-check against FMP
 
@@ -18,8 +18,8 @@ Same report matched within 5 days. *AV exact* is the share of quarters where Alp
 
 | Period | Quarters | Stocks | Same date | Estimate within 1c | AV exact | of which FMP-flagged | of which FMP real surprise |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 2010 on | 1,151 | 19 | 100% | 71% | 5% | 38% | 15% |
-| before 2010 | 813 | 16 | 100% | 83% | 18% | 29% | 8% |
+| 2010 on | 1,430 | 24 | 100% | 67% | 4% | 37% | 17% |
+| before 2010 | 870 | 18 | 100% | 83% | 17% | 29% | 8% |
 
 ## Coverage by year
 
@@ -27,34 +27,34 @@ Flagged = estimate equals actual before 2010; excluded from surprise events as p
 
 | Year | Reported quarters | Symbols | With estimate | Estimate = actual | Flagged |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1996 | 43 | 14 | 88% | 21% | 21% |
-| 1997 | 59 | 16 | 97% | 25% | 25% |
-| 1998 | 64 | 16 | 94% | 22% | 22% |
-| 1999 | 63 | 16 | 98% | 17% | 17% |
-| 2000 | 63 | 16 | 100% | 17% | 17% |
-| 2001 | 64 | 16 | 94% | 22% | 22% |
-| 2002 | 63 | 16 | 97% | 17% | 17% |
-| 2003 | 64 | 16 | 92% | 9% | 9% |
-| 2004 | 64 | 16 | 100% | 19% | 19% |
-| 2005 | 63 | 16 | 100% | 22% | 22% |
-| 2006 | 64 | 16 | 100% | 16% | 16% |
-| 2007 | 64 | 16 | 97% | 11% | 11% |
-| 2008 | 63 | 16 | 100% | 14% | 14% |
-| 2009 | 63 | 16 | 100% | 11% | 11% |
-| 2010 | 63 | 16 | 100% | 10% | 0% |
-| 2011 | 62 | 16 | 100% | 8% | 0% |
-| 2012 | 64 | 16 | 100% | 5% | 0% |
-| 2013 | 67 | 17 | 99% | 6% | 0% |
-| 2014 | 68 | 17 | 100% | 10% | 0% |
-| 2015 | 68 | 17 | 100% | 1% | 0% |
-| 2016 | 67 | 17 | 100% | 3% | 0% |
-| 2017 | 67 | 17 | 100% | 9% | 0% |
-| 2018 | 68 | 17 | 99% | 6% | 0% |
-| 2019 | 72 | 18 | 99% | 7% | 0% |
-| 2020 | 75 | 19 | 99% | 3% | 0% |
-| 2021 | 77 | 19 | 99% | 3% | 0% |
-| 2022 | 76 | 19 | 99% | 1% | 0% |
-| 2023 | 76 | 19 | 100% | 1% | 0% |
-| 2024 | 76 | 19 | 100% | 3% | 0% |
-| 2025 | 76 | 19 | 100% | 3% | 0% |
-| 2026 | 56 | 19 | 100% | 4% | 0% |
+| 1996 | 712 | 235 | 97% | 35% | 35% |
+| 1997 | 978 | 253 | 97% | 35% | 35% |
+| 1998 | 1,132 | 288 | 87% | 30% | 30% |
+| 1999 | 1,162 | 296 | 88% | 27% | 27% |
+| 2000 | 1,209 | 310 | 90% | 26% | 26% |
+| 2001 | 1,234 | 320 | 94% | 30% | 30% |
+| 2002 | 1,283 | 323 | 95% | 27% | 27% |
+| 2003 | 1,297 | 326 | 95% | 26% | 26% |
+| 2004 | 1,309 | 332 | 96% | 21% | 21% |
+| 2005 | 1,339 | 339 | 98% | 19% | 19% |
+| 2006 | 1,368 | 344 | 98% | 15% | 15% |
+| 2007 | 1,388 | 352 | 98% | 16% | 16% |
+| 2008 | 1,419 | 356 | 99% | 13% | 13% |
+| 2009 | 1,425 | 360 | 98% | 12% | 12% |
+| 2010 | 1,455 | 368 | 98% | 11% | 0% |
+| 2011 | 1,486 | 375 | 98% | 12% | 0% |
+| 2012 | 1,509 | 381 | 99% | 13% | 0% |
+| 2013 | 1,543 | 390 | 99% | 12% | 0% |
+| 2014 | 1,569 | 395 | 99% | 12% | 0% |
+| 2015 | 1,591 | 400 | 99% | 10% | 0% |
+| 2016 | 1,603 | 404 | 99% | 10% | 0% |
+| 2017 | 1,617 | 406 | 99% | 9% | 0% |
+| 2018 | 1,621 | 410 | 100% | 7% | 0% |
+| 2019 | 1,648 | 415 | 100% | 8% | 0% |
+| 2020 | 1,666 | 419 | 100% | 4% | 0% |
+| 2021 | 1,685 | 422 | 100% | 4% | 0% |
+| 2022 | 1,688 | 424 | 100% | 5% | 0% |
+| 2023 | 1,695 | 424 | 100% | 4% | 0% |
+| 2024 | 1,708 | 428 | 100% | 5% | 0% |
+| 2025 | 1,714 | 429 | 100% | 4% | 0% |
+| 2026 | 1,309 | 430 | 100% | 3% | 0% |

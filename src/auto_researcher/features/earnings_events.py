@@ -31,7 +31,8 @@ import pandas as pd
 EARNINGS_FEATURES = ("sue", "earnings_ann_return", "eps_beat_streak", "days_since_ann")
 
 
-def announcement_dates(filings: pd.DataFrame, min_lag_days: int = 7) -> pd.DataFrame:
+def announcement_dates(filings: pd.DataFrame, min_lag_days: int = 7,
+                       chunk_symbols: int = 200) -> pd.DataFrame:
     """
     Infer one earnings announcement per periodic report.
 
@@ -55,14 +56,24 @@ def announcement_dates(filings: pd.DataFrame, min_lag_days: int = 7) -> pd.DataF
     eightk = f[f["form_type"] == "8-K"][["symbol", "filing_date", "report_date"]]
     eightk = eightk.assign(same_day=eightk["report_date"] == eightk["filing_date"])
 
-    merged = periodic[["symbol", "period_end", "periodic_filed"]].merge(eightk, on="symbol", how="left")
-    in_window = (merged["filing_date"] >= merged["period_end"] + pd.Timedelta(days=min_lag_days)) & (
-        merged["filing_date"] <= merged["periodic_filed"]
-    )
-    # Same-day 8-Ks first, then the latest filing date within each group.
-    cand = merged[in_window].sort_values(["symbol", "period_end", "same_day", "filing_date"],
-                                         ascending=[True, True, False, False])
-    chosen = cand.drop_duplicates(["symbol", "period_end"])[["symbol", "period_end", "filing_date"]]
+    # Pair each report with the same company's 8-Ks. The pairing is per symbol,
+    # so it runs in batches of symbols: across the whole SEC index the full
+    # cross product is ~100M rows and can exhaust memory.
+    symbols = periodic["symbol"].unique()
+    parts = []
+    for i in range(0, len(symbols), chunk_symbols):
+        batch = symbols[i:i + chunk_symbols]
+        merged = periodic.loc[periodic["symbol"].isin(batch), ["symbol", "period_end", "periodic_filed"]].merge(
+            eightk[eightk["symbol"].isin(batch)], on="symbol", how="left")
+        in_window = (merged["filing_date"] >= merged["period_end"] + pd.Timedelta(days=min_lag_days)) & (
+            merged["filing_date"] <= merged["periodic_filed"]
+        )
+        # Same-day 8-Ks first, then the latest filing date within each group.
+        cand = merged[in_window].sort_values(["symbol", "period_end", "same_day", "filing_date"],
+                                             ascending=[True, True, False, False])
+        parts.append(cand.drop_duplicates(["symbol", "period_end"])[["symbol", "period_end", "filing_date"]])
+    chosen = (pd.concat(parts, ignore_index=True) if parts
+              else pd.DataFrame(columns=["symbol", "period_end", "filing_date"]))
 
     out = periodic[["symbol", "period_end", "periodic_filed"]].merge(
         chosen, on=["symbol", "period_end"], how="left"

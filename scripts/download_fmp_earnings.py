@@ -59,7 +59,8 @@ def date_agreement(fmp: pd.DataFrame, research_cache: Path) -> dict[str, float]:
     """How FMP report dates compare with announcement dates inferred from SEC filings."""
     filings = defeatbeta_table("stock_sec_filing", research_cache,
                                columns=["symbol", "form_type", "filing_date", "report_date"],
-                               filters=[("form_type", "in", ["8-K", "10-Q", "10-K"])])
+                               filters=[("form_type", "in", ["8-K", "10-Q", "10-K"]),
+                                        ("symbol", "in", sorted(fmp["symbol"].unique()))])
     sec = announcement_dates(filings)[["symbol", "announce_date"]]
     sec["announce_date"] = sec["announce_date"].astype("datetime64[ns]")
     left = fmp[fmp["eps_actual"].notna()][["symbol", "date"]].copy()
