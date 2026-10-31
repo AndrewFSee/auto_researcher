@@ -30,6 +30,8 @@ from lxml import etree
 
 PRE_CHARS = 1500   # FinQA pages: median 1458 characters of text before the table
 POST_CHARS = 1700  # and 1751 after it
+TEXT_CHUNK_CHARS = 1500     # narrative chunks for retrieval, about one FinQA pre_text
+MIN_TEXT_CHUNK_CHARS = 200  # shorter stretches (captions, page headers) are not worth a chunk
 BLOCK_TAGS = {"p", "div", "br", "tr", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "table"}
 PREFIX_CELLS = {"$", "(", "$(", "($", "€", "£"}
 SUFFIX_CELLS = {")", "%", ")%", "%)", "pts", "bps"}
@@ -275,8 +277,12 @@ def _cell_text(td) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _parse_table(table, contexts: dict[str, Context]):
-    """Rendered rows, number of header rows and facts of one HTML table."""
+def _parse_table(table, contexts: dict[str, Context], untagged: bool = False):
+    """Rendered rows, number of header rows and facts of one HTML table.
+
+    A table without inline-XBRL facts is rendered only with ``untagged`` (its header
+    rows are those above the first row holding a number) and has no facts.
+    """
     raw_rows = []
     for tr in table.iter("tr"):
         if next(tr.iterancestors("table")) is not table:  # a nested table's row
@@ -295,7 +301,11 @@ def _parse_table(table, contexts: dict[str, Context]):
 
     first_fact_row = next((i for i, cells in enumerate(raw_rows) if any(c[3] for c in cells)), None)
     if first_fact_row is None:
-        return (), 0, ()
+        if not untagged:
+            return (), 0, ()
+        first_fact_row = next((i for i, cells in enumerate(raw_rows)
+                               if any(c[0] and _is_number(c[0]) and not _YEAR.match(c[0])
+                                      for c in cells)), len(raw_rows))
     header_cells = [c for cells in raw_rows[:first_fact_row] for c in cells
                     if c[0] and (not _is_number(c[0]) or _YEAR.match(c[0]))]
 
@@ -363,8 +373,28 @@ def _fact(el, contexts, row, cell, rendered_cell, header) -> Fact | None:
     )
 
 
-def parse_filing(html: bytes) -> list[Page]:
-    """FinQA-style pages for every table of a filing that has inline-XBRL facts."""
+@dataclass(frozen=True)
+class TextChunk:
+    """A run of narrative sentences between two tables (for retrieval)."""
+
+    after_table: int  # the text follows table ``after_table - 1``; 0 = before the first table
+    part: int         # position within that stretch of text
+    sentences: tuple[str, ...]
+
+
+def _chunk_sentences(sentences: list[str], limit: int = TEXT_CHUNK_CHARS) -> list[tuple[str, ...]]:
+    chunks: list[list[str]] = [[]]
+    size = 0
+    for s in sentences:
+        if chunks[-1] and size + len(s) > limit:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(s[:limit])
+        size += len(s) + 1
+    return [tuple(c) for c in chunks if sum(len(s) for s in c) >= MIN_TEXT_CHUNK_CHARS]
+
+
+def _document(html: bytes):
     doc = lxml.html.fromstring(html, parser=lxml.html.HTMLParser(huge_tree=True))
     contexts = _contexts(doc)
     for el in list(doc.iter("ix:header")):  # hidden: contexts, units, hidden facts
@@ -373,12 +403,17 @@ def parse_filing(html: bytes) -> list[Page]:
                and "display:none" in (e.get("style") or "").replace(" ", "").lower()]:
         el.drop_tree()
     tables = [t for t in doc.iter("table") if next(t.iterancestors("table"), None) is None]
-    segments = _text_segments(doc, tables)
+    return contexts, tables, _text_segments(doc, tables)
+
+
+def _pages(contexts, tables, segments, untagged: bool) -> list[Page]:
     pages = []
     for i, table in enumerate(tables):
-        rows, n_header, facts = _parse_table(table, contexts)
+        rows, n_header, facts = _parse_table(table, contexts, untagged)
         if not facts:
-            continue
+            # untagged tables only when they hold numbers (not layout or signature tables)
+            if not untagged or len(rows) < 2 or not any(_is_number(c) for r in rows for c in r[1:] if c):
+                continue
         pages.append(Page(
             index=i,
             pre_text=_take(segments[i], PRE_CHARS, from_end=True),
@@ -390,6 +425,29 @@ def parse_filing(html: bytes) -> list[Page]:
     return pages
 
 
+def parse_filing(html: bytes) -> list[Page]:
+    """FinQA-style pages for every table of a filing that has inline-XBRL facts."""
+    return _pages(*_document(html), untagged=False)
+
+
+def parse_chunks(html: bytes) -> tuple[list[Page], list[TextChunk]]:
+    """Every table with numbers as a page (tagged or not), and the narrative text, for retrieval.
+
+    Page indexes are the same as ``parse_filing``'s, so a question generated from a
+    tagged page can be matched to its page here.
+    """
+    contexts, tables, segments = _document(html)
+    pages = _pages(contexts, tables, segments, untagged=True)
+    text = [TextChunk(i, k, chunk) for i, seg in enumerate(segments)
+            for k, chunk in enumerate(_chunk_sentences(seg))]
+    return pages, text
+
+
 def load_filing(header: FilingHeader) -> list[Page]:
     with gzip.open(header.document, "rb") as fh:
         return parse_filing(fh.read())
+
+
+def load_chunks(header: FilingHeader) -> tuple[list[Page], list[TextChunk]]:
+    with gzip.open(header.document, "rb") as fh:
+        return parse_chunks(fh.read())
