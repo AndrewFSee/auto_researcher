@@ -45,6 +45,27 @@ from auto_researcher.llm.retrieval import BM25, parse_choice, ranking, rerank_me
 logger = logging.getLogger("filing_rerank_eval")
 
 
+# Written after the test-set run; the thinking numbers are from the dev run
+# (--sets dev --think), which these test tables do not include.
+FINDINGS = [
+    "## Findings", "",
+    "- The re-ranker was frozen on dev (commit c305a4c) before either test set was run. On test it "
+    "lifts the right table from 44.9% to 55.5% and end-to-end accuracy from 53.4% to 65.8%; on the "
+    "paraphrased questions, 44.5% to 49.0% and 50.2% to 59.0%. About 30 points remain to the oracle page.",
+    "- Retrieval is no longer the main limit: the right table is among BM25's top 10 for about 90% of "
+    "questions. The pick is: given the right table among the 10, the re-ranker chooses it 61% of the "
+    "time (55% paraphrased).",
+    "- The gain is smaller on paraphrased questions (+4.5 points on the pick, against +10.6). The "
+    "summaries show only the row labels that share a word with the question, so rewording likely "
+    "hides the rows that would identify the table.",
+    "- Thinking, dev only (all 447 questions): right table 66.7% against 54.4% without thinking. "
+    "83 questions are right only with thinking and 28 only without (sign test p = 2e-7). It costs "
+    "31.2 s per question against 2.7 s. 4.5% of thinking replies are empty after about 90 s, likely "
+    "the 4,096-token limit running out mid-thought; those keep BM25's first table.",
+    "- Thinking has not been run on the test sets: about 17 hours for both on this GPU.",
+]
+
+
 def candidates(records: list[dict], chunks: dict[str, list], k: int) -> dict[str, list[str]]:
     """BM25's top k table keys per question (ranked over all chunks, tables kept)."""
     out: dict[str, list[str]] = {}
@@ -161,6 +182,8 @@ def main() -> None:
             for m, recs in res.items():
                 lines.append(f"| {name} | {m} | {pct(np.mean([r['page'] == gold_key(r['id']) for r in recs]))} | "
                              f"{pct(np.mean([r['tolerant'] for r in recs]))} |")
+    if "test" in args.sets:
+        lines += ["", *FINDINGS]
     args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info("wrote %s", args.out)
 
