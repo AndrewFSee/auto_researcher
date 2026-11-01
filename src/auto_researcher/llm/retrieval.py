@@ -151,6 +151,50 @@ class OllamaEmbedder:
         return vecs
 
 
+RERANK_SYSTEM = """\
+You pick the table in a company's annual report that holds the numbers a question \
+needs. Each candidate shows the text just before the table, its column headers and \
+the row labels that share a word with the question (with the table's row count); the \
+numbers are left out. Pick the table with a row for the line item \
+the question asks about and columns for the years it asks about. If several tables \
+qualify, pick the one where that line item is reported in full (a financial statement \
+or the note that breaks it down) rather than one that mentions it in passing. Reply \
+with the candidate's number only."""
+
+
+def focused_summary(page: Page, query: Sequence[str], max_rows: int = 15, caption_chars: int = 200) -> str:
+    """``table_summary`` limited to the rows that share a word with the query (in table order).
+
+    A financial statement has 40+ rows, so a summary cut to length can drop the very row
+    a question asks about; showing the matching rows keeps it. With fewer than 5 matches
+    the first rows fill in, and the row count is given.
+    """
+    q = set(query)
+    body = [row[0] for row in page.table[page.n_header_rows:] if row and row[0].strip()]
+    hits = [j for j, label in enumerate(body) if q & set(tokenize(label))]
+    keep = sorted(set(hits[:max_rows]) | set(range(min(len(body), max(0, 5 - len(hits))))))
+    labels = "; ".join(body[j] for j in keep)
+    if len(keep) < len(body):
+        labels += f" ({len(body)} rows in all)"
+    caption = " ".join(page.pre_text)[-caption_chars:]
+    header = " ".join(c for row in page.table[:page.n_header_rows] for c in row if c.strip())
+    return "\n".join(x for x in (caption, header, labels) if x)
+
+
+def rerank_messages(question: str, candidates: Sequence[Page]) -> list[dict]:
+    """A listwise re-ranking prompt: the question and numbered table summaries."""
+    query = tokenize(question)
+    blocks = [f"[{i}]\n{focused_summary(p, query)}" for i, p in enumerate(candidates, 1)]
+    return [{"role": "system", "content": RERANK_SYSTEM},
+            {"role": "user", "content": f"Question: {question}\n\n" + "\n\n".join(blocks)}]
+
+
+def parse_choice(reply: str, k: int) -> int | None:
+    """The 0-based candidate a re-ranking reply names, or None if it names none of 1..k."""
+    m = re.search(r"\d+", reply)
+    return int(m.group()) - 1 if m and 1 <= int(m.group()) <= k else None
+
+
 def ranking(scores: np.ndarray) -> list[int]:
     """Indices from best to worst (stable for ties)."""
     return list(np.argsort(-scores, kind="stable"))

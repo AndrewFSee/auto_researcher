@@ -9,8 +9,11 @@ from auto_researcher.llm.retrieval import (
     BM25,
     OllamaEmbedder,
     filing_chunks,
+    focused_summary,
     page_text,
+    parse_choice,
     ranking,
+    rerank_messages,
     rrf,
     table_summary,
     tokenize,
@@ -81,3 +84,22 @@ def test_embedder_adds_prefixes_and_caches_documents(tmp_path, monkeypatch):
     emb.queries(["q"])
     assert calls[-1] == ["search_query: q"]
     assert OllamaEmbedder("bge-m3").query_prefix == ""
+
+
+def test_rerank_prompt_numbers_candidates_and_parse_choice_is_strict():
+    msgs = rerank_messages("how much did revenue change?", [_page(0, "net sales"), _page(5, "net income")])
+    user = msgs[1]["content"]
+    assert user.startswith("Question: how much did revenue change?\n\n[1]\n")
+    assert "[2]" in user and "net income" in user and "100" not in user  # no numbers
+    assert parse_choice("3", 10) == 2
+    assert parse_choice("[2] the income statement", 10) == 1
+    assert parse_choice("11", 10) is None and parse_choice("none", 10) is None
+
+
+def test_focused_summary_shows_matching_rows_and_the_row_count():
+    rows = tuple((f"line {i}", "1", "2") for i in range(30)) + (("interest income", "5", "6"),)
+    page = Page(0, ("statements of operations",), (("", "2025", "2024"),) + rows, (), 1, ())
+    s = focused_summary(page, tokenize("average interest income 2023 to 2025"))
+    assert s.splitlines()[-1] == "line 0; line 1; line 2; line 3; interest income (31 rows in all)"
+    few = focused_summary(page, tokenize("unrelated"))
+    assert few.splitlines()[-1] == "line 0; line 1; line 2; line 3; line 4 (31 rows in all)"
