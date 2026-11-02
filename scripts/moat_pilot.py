@@ -146,6 +146,14 @@ V2_NOTES = [
     "on capital before the overall call (`ONE_CALL_SYSTEM_V2`); sources are still rated from quotes only. "
     "Item 1 texts that start mid-sentence or hold MD&A or financial statement headings early are not tagged "
     "(`item1_problem`).",
+    "**Tuned on the hand-checked set, then frozen.** Against the targets the 47 v1 verdicts imply, v2 "
+    "(fixed rules: high returns plus a source rated 1 meant narrow, one 8-10% cost of capital) put 34 overall "
+    "calls on target and moved weak resellers up and utilities down; v3 (returns corroborate the text, a lower "
+    "cost of capital for utilities and REITs) put 39. A second run of the unchanged v1 prompt put 36, and 4 "
+    "of 47 calls changed between the two identical v1 runs, so v3's lead is small. v3 was committed (bfcd03b) "
+    "before the fresh set was tagged once.",
+    "**The fresh set** is 50 companies in no earlier set, drawn the same way (sector-stratified, seed 1) from "
+    "the 2025 10-Ks that pass the Item 1 check; its tags await the same hand check.",
     "**The financial history is point-in-time:** SEC XBRL company facts filed on or before the 10-K's filing "
     "date (the 10-K's own figures included), the latest value known then for each fiscal year "
     "(`data.sec_fundamentals.build_pit_table`). ROIC is operating income after a 21% tax over average equity "
