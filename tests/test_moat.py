@@ -7,6 +7,9 @@ from auto_researcher.llm.moat import (
     check_rating,
     chunk_lines,
     collect_evidence,
+    financial_ratios,
+    financial_table,
+    item1_problem,
     name_variants,
     number_quotes,
     one_call_params,
@@ -126,3 +129,48 @@ def test_verify_evidence_keeps_the_reply_numbering_for_citations():
               "overall": {"moat": "wide", "reason": ""}}
     out = check_rating(rating, numbered)
     assert out["intangibles"]["rating"] == 0 and out["switching_costs"]["rating"] == 2
+
+
+def test_v2_request_adds_the_financial_history_and_a_returns_step():
+    params = one_call_params("claude-sonnet-5-5", "Item 1 text", prompt="v2", financials="| table |")
+    content = params["messages"][0]["content"]
+    assert content.startswith("Business section (Item 1):\n\nItem 1 text") and content.endswith("| table |")
+    schema = params["output_config"]["format"]["schema"]
+    assert all(o.get("additionalProperties") is False for o in _objects(schema))
+    assert schema["required"][-2:] == ["returns", "overall"]
+    assert "Step 4" in params["system"][0]["text"] and "Step 2" in params["system"][0]["text"]
+    no_data = one_call_params("claude-sonnet-5-5", "Item 1 text", prompt="v2")
+    assert no_data["messages"][0]["content"].endswith("Not available.")
+    zero = {"rating": 0, "quotes": [], "reason": ""}
+    rating = {k: zero for k in ("intangibles", "switching_costs", "network_effects", "cost_advantage",
+                                "efficient_scale")}
+    checked = check_rating({**rating, "returns": {"reason": "r", "verdict": "above"},
+                            "overall": {"reason": "o", "moat": "none"}}, [])
+    assert checked["returns"]["verdict"] == "above"
+
+
+def test_financial_ratios_use_average_capital_and_skip_negative_capital():
+    years = {
+        "2023-12-31": {"revenue": 100.0, "equity": 50.0, "debt_noncurrent": 30.0, "cash": 10.0, "total_assets": 200.0},
+        "2024-12-31": {"revenue": 110.0, "operating_income": 22.0, "net_income": 11.0, "operating_cash_flow": 20.0,
+                       "capex": 9.0, "equity": 70.0, "debt_noncurrent": 30.0, "cash": 10.0, "total_assets": 220.0},
+    }
+    r = financial_ratios(years)["2024-12-31"]
+    assert round(r["Revenue growth"], 3) == 0.1 and r["Operating margin"] == 0.2 and r["FCF margin"] == 0.1
+    assert round(r["ROIC"], 4) == round(22 * 0.79 / 80, 4) and r["ROE"] == 11 / 60 and r["ROA"] == 11 / 210
+    years["2023-12-31"]["equity"] = -5.0  # buybacks past zero: no meaningful ROE that year
+    assert financial_ratios(years)["2024-12-31"]["ROE"] is None
+    table = financial_table({"2024-12-31": {**r, "ROE": 7.3}})
+    assert "| 2024-12-31 | 10% | 20% | 10% | 10% | 22% | >100% | 5% |" in table
+    assert financial_table({"2024-12-31": dict.fromkeys(r)}) is None
+
+
+def test_item1_problem_flags_spans_from_other_parts_of_the_10k():
+    assert item1_problem("Overview\nWe make engines.") is None
+    assert item1_problem("usiness. Overview We make engines.") is None  # cut one letter late
+    assert item1_problem("the Company makes engines.") is None  # anonymized name
+    assert item1_problem("(dollars in millions) Introduction We mine gold.") is None
+    assert item1_problem("for additional discussion. Impairments During the year") == "starts mid-sentence"
+    assert item1_problem('." \nCritical Accounting Policies\nThe preparation of').startswith("'Critical")
+    assert item1_problem("Financial Statements\nCONSOLIDATED BALANCE SHEETS\n") is not None
+    assert item1_problem('Overview\nSee "Critical Accounting Estimates" in Item 7.') is None

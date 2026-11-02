@@ -22,6 +22,12 @@ The company's name and ticker are replaced by "the Company" (``anonymize``) and 
 model is told to use only the text, because it knows how these companies fared after
 the filing. Product and brand names still identify many companies, so this reduces
 the lookahead risk but does not remove it.
+
+Prompt ``v2`` (``ONE_CALL_SYSTEM_V2``) adds the company's financial history as filed up
+to the 10-K (``financial_table``) and a step that judges returns on capital before the
+overall call; the sources are still rated from quotes only. It was written after the
+hand check of the ``v1`` tags, which found them too low mostly where the moat shows in
+returns that Item 1 does not mention.
 """
 
 from __future__ import annotations
@@ -304,7 +310,8 @@ def check_rating(rating: dict, numbered: list[tuple[int, str, str]]) -> dict:
     to 0 any rating above 0 left without a citation. Any source may cite a quote the
     extract pass put under another source. Returns the cleaned rating and the changes."""
     kind_of = {i: k for i, k, _ in numbered}
-    out, fixes = {"overall": rating["overall"]}, []
+    out = {k: rating[k] for k in ("returns", "overall") if k in rating}
+    fixes = []
     for kind in SOURCES:
         r = dict(rating[kind])
         cited = list(dict.fromkeys(i for i in r.get("quotes", []) if kind_of.get(i, "against") != "against"))
@@ -385,18 +392,193 @@ ONE_CALL_SCHEMA = _strict({
 })
 
 
-def one_call_params(model: str, item1: str, effort: str = "high", max_tokens: int = 16000) -> dict:
-    """Messages API request: the fixed system prompt (cached across companies), Item 1 as the
-    user turn, adaptive thinking and the JSON schema. No sampling parameters (rejected by
-    the current models)."""
+_INTRO, _REST = ONE_CALL_SYSTEM.split("\n\nStep 1", 1)
+_STEPS_1_2 = _REST.split("\n\nStep 3", 1)[0]
+RETURNS_VERDICTS = ("above", "near", "below", "unclear")
+
+ONE_CALL_SYSTEM_V2 = f"""\
+{_INTRO}
+
+You also get the company's financial history: up to five fiscal years of growth, margins \
+and returns, computed from the figures it filed with the SEC up to this report (nothing \
+later). Use it in steps 3 and 4 only; the sources in step 2 still need quotes.
+
+Step 1{_STEPS_1_2}
+
+Step 3, returns. In a sentence or two, say what the financial history shows: return on \
+invested capital (ROIC) against a cost of capital of about 8-10%, or for banks, insurers \
+and other financial companies return on equity (ROE) and on assets instead, and how \
+steady margins and returns have been. Then classify the returns: "above" (clearly and \
+consistently above the cost of capital), "near", "below", or "unclear" (too few figures, \
+or figures distorted by acquisitions, write-downs or one-off items).
+
+Step 4, overall: "wide" (advantages should last 20 years or more), "narrow" (about 10 \
+years) or "none", after weighing the evidence against a moat and the returns. A moat is \
+an advantage the text shows, and it should show up in returns:
+- Returns consistently above the cost of capital, with at least one source rated 1 or \
+more, support a narrow moat even when each source is modest. Wide needs a source rated 2 \
+and returns well above the cost of capital.
+- Returns near or below the cost of capital for several years count against a moat, \
+whatever the text claims; only a strong source outweighs them, such as a regulated \
+franchise whose returns are capped by its regulator.
+- High returns with no source in the text are not a moat by themselves; say so in the \
+reason."""
+
+ONE_CALL_SCHEMA_V2 = _strict({
+    "type": "object",
+    "properties": {
+        "evidence": EXTRACT_SCHEMA["properties"]["evidence"],
+        **{k: _SOURCE_RATING for k in SOURCES},
+        "returns": {"type": "object",
+                    "properties": {"reason": {"type": "string"},
+                                   "verdict": {"type": "string", "enum": list(RETURNS_VERDICTS)}},
+                    "required": ["reason", "verdict"]},
+        "overall": RATE_SCHEMA["properties"]["overall"],
+    },
+    "required": ["evidence", *SOURCES, "returns", "overall"],
+})
+# v3: v2's fixed rules moved calls the wrong way on the hand-checked set (high returns +
+# a modest source -> narrow for low-margin resellers; one cost of capital for utilities
+# and REITs), so returns now corroborate the text instead of deciding the call.
+ONE_CALL_SYSTEM_V3 = f"""\
+{_INTRO}
+
+You also get the company's financial history: up to five fiscal years of growth, margins \
+and returns, computed from the figures it filed with the SEC up to this report (nothing \
+later). Use it in steps 3 and 4 only; the sources in step 2 still need quotes.
+
+Step 1{_STEPS_1_2}
+
+Step 3, returns. In a sentence or two, say what the financial history shows. Compare \
+return on invested capital (ROIC) with the company's cost of capital: about 8-10% for \
+most companies, about 5-7% for regulated utilities and real estate companies, whose \
+long-lived assets are financed cheaply. For banks, insurers and other financial \
+companies, compare return on equity (ROE) with about 10% instead. Discount returns that \
+are inflated by small or negative equity (buybacks, leverage) or by a thin capital base \
+with low margins, as for distributors and resellers. Then classify the returns: "above" \
+(clearly and consistently above the cost of capital), "near", "below", or "unclear" \
+(too few figures, or figures distorted by acquisitions, write-downs or one-off items).
+
+Step 4, overall: "wide" (advantages should last 20 years or more), "narrow" (about 10 \
+years) or "none", after weighing the evidence against a moat. Returns corroborate the \
+text; they do not replace it:
+- High returns do not turn modest scale, contracts or relationships into a moat when the \
+text describes a commodity-like or price-driven market.
+- Returns well above the cost of capital for all five years make a moat the text states \
+plainly more credible, even when each source is rated 1. Very high returns (say above \
+25%) sustained for five years, together with a mechanism the text describes but does \
+not quantify (a brand, a distribution network, an installed base), can support narrow.
+- Returns below the cost of capital for several years count against a moat, unless they \
+are the capped returns of a regulated franchise: then the franchise is the moat.
+- Wide needs advantages that should last 20 years or more: a source rated 2, or several \
+sources that reinforce each other, with returns well above the cost of capital \
+throughout."""
+PROMPTS = {"v1": (ONE_CALL_SYSTEM, ONE_CALL_SCHEMA), "v2": (ONE_CALL_SYSTEM_V2, ONE_CALL_SCHEMA_V2),
+           "v3": (ONE_CALL_SYSTEM_V3, ONE_CALL_SCHEMA_V2)}
+
+
+def one_call_params(model: str, item1: str, effort: str = "high", max_tokens: int = 16000,
+                    prompt: str = "v1", financials: str | None = None) -> dict:
+    """Messages API request: the fixed system prompt (cached across companies), Item 1 (and
+    for ``v2`` the financial history) as the user turn, adaptive thinking and the JSON
+    schema. No sampling parameters (rejected by the current models)."""
+    system, schema = PROMPTS[prompt]
+    content = f"Business section (Item 1):\n\n{item1}"
+    if prompt != "v1":
+        content += f"\n\nFinancial history (fiscal years, as filed up to this report):\n\n" \
+                   f"{financials or 'Not available.'}"
     return {
         "model": model,
         "max_tokens": max_tokens,
-        "system": [{"type": "text", "text": ONE_CALL_SYSTEM, "cache_control": {"type": "ephemeral"}}],
-        "messages": [{"role": "user", "content": f"Business section (Item 1):\n\n{item1}"}],
+        "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": content}],
         "thinking": {"type": "adaptive"},
-        "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": ONE_CALL_SCHEMA}},
+        "output_config": {"effort": effort, "format": {"type": "json_schema", "schema": schema}},
     }
+
+
+# Ratios per fiscal year, from the point-in-time items of ``data.sec_fundamentals``.
+# ROIC uses operating income taxed at the 21% US rate over equity + debt - cash.
+TAX_RATE = 0.21
+# No gross margin: cost of revenue is tagged in under half of company-years and means
+# little for utilities and financial companies (a utility showed 97-100%).
+RATIOS = ("Revenue growth", "Operating margin", "Net margin", "FCF margin", "ROIC", "ROE", "ROA")
+
+
+def financial_ratios(years: dict) -> dict[str, dict[str, float | None]]:
+    """``years`` maps fiscal year end -> {item: value}, oldest first, including the year
+    before the first one shown (for growth and averages). Returns ratios for every year
+    but that first."""
+    def div(a, b):
+        return a / b if a is not None and b not in (None, 0) and not (b < 0) else None
+
+    def avg(a, b):
+        """Average of two year-end balances; None unless both are positive (or the prior
+        one is missing), since returns on near-zero or negative capital mean nothing."""
+        if a is None or a <= 0 or (b is not None and b <= 0):
+            return None
+        return a if b is None else (a + b) / 2
+
+    def capital(v):
+        debt = (None if v.get("debt_current") is None and v.get("debt_noncurrent") is None
+                else (v.get("debt_current") or 0) + (v.get("debt_noncurrent") or 0))
+        debt = debt if debt is not None else v.get("debt_total")
+        if v.get("equity") is None:
+            return None
+        return v["equity"] + (debt or 0) - (v.get("cash") or 0)
+
+    out = {}
+    ends = list(years)
+    for prev, end in zip(ends, ends[1:]):
+        v, p = years[end], years[prev]
+        rev = v.get("revenue")
+        fcf = (v["operating_cash_flow"] - (v.get("capex") or 0)) if v.get("operating_cash_flow") is not None else None
+        nopat = v["operating_income"] * (1 - TAX_RATE) if v.get("operating_income") is not None else None
+        cap = avg(capital(v), capital(p))
+        out[end] = {
+            "Revenue growth": div(rev, p.get("revenue")) - 1 if div(rev, p.get("revenue")) is not None else None,
+            "Operating margin": div(v.get("operating_income"), rev),
+            "Net margin": div(v.get("net_income"), rev),
+            "FCF margin": div(fcf, rev),
+            "ROIC": div(nopat, cap),
+            "ROE": div(v.get("net_income"), avg(v.get("equity"), p.get("equity"))),
+            "ROA": div(v.get("net_income"), avg(v.get("total_assets"), p.get("total_assets"))),
+        }
+    return out
+
+
+def financial_table(ratios: dict[str, dict[str, float | None]]) -> str | None:
+    """Markdown table, one row per fiscal year; None if there is nothing to show."""
+    if not ratios or all(x is None for r in ratios.values() for x in r.values()):
+        return None
+    lines = ["| Fiscal year end | " + " | ".join(RATIOS) + " |", "| --- |" + " ---: |" * len(RATIOS)]
+    def cell(x):
+        return "n/a" if x is None else ">100%" if x > 1 else "<-100%" if x < -1 else f"{x:.0%}"
+
+    for end, r in ratios.items():
+        lines.append(f"| {end} | " + " | ".join(cell(r[k]) for k in RATIOS) + " |")
+    return "\n".join(lines + ["", "ROIC: operating income after a 21% tax, over average equity + debt - cash. "
+                                  "n/a: not reported in the filings' XBRL data, or not meaningful (for example "
+                                  "negative or near-zero capital)."])
+
+
+# A located Item 1 that starts mid-sentence (the span began at a cross-reference) or
+# holds MD&A or financial statement headings early is another part of the 10-K.
+_LEAD = " \t\r\n​ ﻿.,;:”\"’'"
+_HEADING_START = re.compile(r"(?i)^.{0,12}(business|usiness|siness|description|general|overview|item\s*1)")
+_WRONG_HEADING = re.compile(
+    r"CONSOLIDATED (BALANCE SHEETS?|STATEMENTS? OF)|(?m:^[ \t]*Critical Accounting (Policies|Estimates)[ \t]*$)")
+
+
+def item1_problem(text: str, window: int = 10_000) -> str | None:
+    """Why ``text`` does not look like a 10-K's Item 1, or None if it does."""
+    start = " ".join(text[:300].split()).lstrip(_LEAD)
+    if start.startswith("the Company"):  # the name, after ``anonymize``
+        start = "T" + start[1:]
+    if not (start[:1].isupper() or start[:1].isdigit() or start[:1] == "(" or _HEADING_START.match(start)):
+        return "starts mid-sentence"
+    m = _WRONG_HEADING.search(text[:window])
+    return f"'{m.group(0).strip()}' in the first {window:,} characters" if m else None
 
 
 def verify_evidence(evidence: list[dict], text: str) -> tuple[list[tuple[int, str, str]], dict[str, int]]:
@@ -419,8 +601,11 @@ def verify_evidence(evidence: list[dict], text: str) -> tuple[list[tuple[int, st
     return numbered, counts
 
 
-def one_call_version() -> str:
-    return _hash(ONE_CALL_SYSTEM, ONE_CALL_SCHEMA, MAX_EVIDENCE, MIN_QUOTE_CHARS)
+def one_call_version(prompt: str = "v1") -> str:
+    system, schema = PROMPTS[prompt]
+    if prompt == "v1":
+        return _hash(system, schema, MAX_EVIDENCE, MIN_QUOTE_CHARS)
+    return _hash(system, schema, MAX_EVIDENCE, MIN_QUOTE_CHARS, TAX_RATE, RATIOS)
 
 
 def _hash(*parts) -> str:
