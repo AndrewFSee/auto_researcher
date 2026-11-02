@@ -102,6 +102,28 @@ NOTES = [
     "**Only Item 1** (business) is read, from one 10-K per company; moat evidence in MD&A or risk factors "
     "is missed, and 'against' quotes come from the competition sections Item 1 usually has.",
 ]
+# Tickers whose "Item 1" from sentiq's section offsets is another part of the 10-K (found in the hand check).
+WRONG_TEXT = {
+    "DGX": "MD&A and the financial statements",
+    "TTWO": "MD&A: impairments, critical accounting policies, liquidity",
+    "O": "the financial statements, with the business description only at the end",
+}
+HAND_CHECK_NOTES = [
+    "**One rater, with hindsight.** The verdicts are the user's, made with the company names shown and "
+    "knowing how the companies fared since; they measure whether the tags look right to an informed reader, "
+    "not a ground truth. Several are marked low confidence (CHRW, EOG, O).",
+    "**The tagger errs low.** Of the overall calls the reviewer disputed on the right text, all but one say "
+    "the moat should be higher, as do 21 of the 22 disputed source ratings, mostly 0s. The reasons given "
+    "lean on returns: IDXX's returns on capital, AME's margins, CMG's unit economics, and the one call "
+    "disputed as too high, CCL, because cruising rarely earns its cost of capital. Item 1 has no numbers, "
+    "so the tagger cannot see returns; NTRS was held to a filing that never describes its custody moat.",
+    "**A source rated 1 does not force a moat, and that is mostly right.** 18 companies were called none "
+    "despite a source rated 1; the reviewer agreed on 16 of them.",
+    "**Wrong text from the section offsets.** In a scan of all 480 10-Ks filed in 2025 that have an Item 1 "
+    "span, 11 start like MD&A or financial statements in their first 3,000 characters (CL, ZTS, PLD, BALL, "
+    "DGX, BG, CDNS, LH, O, AFL, MCHP); TTWO's span is wrong too but starts mid-sentence, so the scan "
+    "misses it. Others run on into Item 1A (REGN, NTAP), which adds risk factors but keeps Item 1.",
+]
 SHORT = {"intangibles": "intang", "switching_costs": "switch", "network_effects": "network",
          "cost_advantage": "cost", "efficient_scale": "eff.scale"}
 
@@ -301,6 +323,40 @@ def _excerpt(text: str, chars: int = 300) -> str:
     return text if len(text) <= chars else text[:chars].rsplit(" ", 1)[0] + " ..."
 
 
+def hand_check(results: list[dict], verdicts: dict) -> list[str]:
+    """Score the tags against the reviewer's verdicts (agree / too high / too low)."""
+    pct = "{:.0%}".format
+    rows = [(r["ticker"], r["rating"], verdicts[r["ticker"]]) for r in results
+            if r["rating"] and r["ticker"] in verdicts]
+    lines = ["", "## Hand check", "",
+             f"{len(rows)} companies reviewed on the review page (verdicts in `data/moat/verdicts.json`). "
+             f"Tickers with the wrong text: {', '.join(f'{t} ({w})' for t, w in WRONG_TEXT.items())}.", "",
+             "| Companies | Overall agreed | Too high | Too low | Source ratings agreed | Too high | Too low |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    for label, keep in [("all", lambda t: True), ("right text", lambda t: t not in WRONG_TEXT)]:
+        sub = [(t, g, v) for t, g, v in rows if keep(t)]
+        ov = Counter(v["overall"] for _, _, v in sub)
+        src = Counter(v["sources"][k] for _, _, v in sub for k in SOURCES)
+        lines.append(f"| {label} ({len(sub)}) | {ov['agree']} ({pct(ov['agree'] / len(sub))}) | {ov['high']} | "
+                     f"{ov['low']} | {src['agree']} of {sum(src.values())} ({pct(src['agree'] / sum(src.values()))})"
+                     f" | {src['high']} | {src['low']} |")
+    lines += ["", "| Tag | Reviewed (right text) | Agreed |", "| --- | ---: | ---: |"]
+    for m in MOATS:
+        sub = [v for t, g, v in rows if g["overall"]["moat"] == m and t not in WRONG_TEXT]
+        lines.append(f"| {m} | {len(sub)} | {sum(v['overall'] == 'agree' for v in sub)} |")
+    lines += ["", "Disputed overall calls (\"too low\" = the moat should be higher):", ""]
+    for t, g, v in rows:
+        if v["overall"] != "agree":
+            lines.append(f"* **{t}**: tagged {g['overall']['moat']}, too {v['overall']}"
+                         f"{' (wrong text)' if t in WRONG_TEXT else ''}. {v['note']}")
+    lines += ["", "Disputed source ratings:", ""]
+    for t, g, v in rows:
+        bad = [f"{k} {g[k]['rating']} too {v['sources'][k]}" for k in SOURCES if v["sources"][k] != "agree"]
+        if bad:
+            lines.append(f"* {t}: {'; '.join(bad)}")
+    return lines + ["", "### What the hand check shows", ""] + [f"* {n}" for n in HAND_CHECK_NOTES]
+
+
 def cmd_report(args) -> None:
     tag = run_tags(args)[1]
     results = json.loads((DATA / f"{args.set}__{tag}.json").read_text(encoding="utf-8"))
@@ -346,6 +402,8 @@ def cmd_report(args) -> None:
         lines.append(f"| {s} | " + " | ".join(str(by_sector[(s, m)]) for m in MOATS) + " |")
     if args.set == "sample":
         lines += ["", "## Notes", ""] + [f"* {n}" for n in NOTES]
+        if (DATA / "verdicts.json").exists():
+            lines += hand_check(results, json.loads((DATA / "verdicts.json").read_text(encoding="utf-8")))
     lines += ["", "## Review sheet", "",
               "For each company: what it does (the opening of Item 1, name hidden), the overall call, then each "
               "source rated above 0 with the model's reason and the quotes it cites, and the quotes against a "

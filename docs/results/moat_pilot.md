@@ -1,6 +1,6 @@
 # Moat tagger pilot
 
-Generated 2026-11-01 00:11 by `scripts/moat_pilot.py`, set `sample`, model `claude-sonnet-5-5`, prompts `claude-sonnet-5-5__cbc3f896c__high`. Two passes over each 10-K's Item 1 (business): extract quotes per chunk and check them word for word against the text, then rate each moat source from the verified quotes only (`auto_researcher.llm.moat`).
+Generated 2026-11-02 17:22 by `scripts/moat_pilot.py`, set `sample`, model `claude-sonnet-5-5`, prompts `claude-sonnet-5-5__cbc3f896c__high`. Two passes over each 10-K's Item 1 (business): extract quotes per chunk and check them word for word against the text, then rate each moat source from the verified quotes only (`auto_researcher.llm.moat`).
 
 * Companies: 50 (50 rated); chunks read 50 (Item 1 cut at 16 chunks for 0).
 * Quotes returned: 488; kept 486; not found in the text 1 (0.2%); duplicates 1; over the cap 0; unparseable replies 0.
@@ -86,6 +86,59 @@ Generated 2026-11-01 00:11 by `scripts/moat_pilot.py`, set `sample`, model `clau
 * **Cost** $2.43 for the 50 (Claude API, sentiq's workspace: auto_researcher's own key has no credit).
 * **Name hiding is partial.** Name, short name, self-defined aliases, tickers and web addresses are replaced, but brands and details (Tinder, F-35, United's hubs) identify many companies, and Claude knows how they fared after these 10-Ks (filed in 2025, before its training cutoff). The tags are fit for a hand check and for describing companies; a return test needs filings after the model's cutoff or a check that hiding more of the name does not change the tags.
 * **Only Item 1** (business) is read, from one 10-K per company; moat evidence in MD&A or risk factors is missed, and 'against' quotes come from the competition sections Item 1 usually has.
+
+## Hand check
+
+50 companies reviewed on the review page (verdicts in `data/moat/verdicts.json`). Tickers with the wrong text: DGX (MD&A and the financial statements), TTWO (MD&A: impairments, critical accounting policies, liquidity), O (the financial statements, with the business description only at the end).
+
+| Companies | Overall agreed | Too high | Too low | Source ratings agreed | Too high | Too low |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| all (50) | 41 (82%) | 1 | 8 | 228 of 250 (91%) | 1 | 21 |
+| right text (47) | 40 (85%) | 1 | 6 | 215 of 235 (91%) | 1 | 19 |
+
+| Tag | Reviewed (right text) | Agreed |
+| --- | ---: | ---: |
+| none | 23 | 19 |
+| narrow | 22 | 19 |
+| wide | 2 | 2 |
+
+Disputed overall calls ("too low" = the moat should be higher):
+
+* **TTWO**: tagged none, too low (wrong text). Should be higher. The tagger gave intangibles a 1 and still called it no moat. GTA, NBA 2K and Rockstar's track record are durable IP.
+* **CCL**: tagged narrow, too high. Should be lower. Capacity is an oligopoly, but cruising has rarely earned returns above the cost of capital, and customers switch freely.
+* **CMG**: tagged none, too low. Should be higher. Brand and unit economics are well above restaurant peers.
+* **NTRS**: tagged none, too low. Should be higher. Custody switching costs and scale are the classic trust-bank moat; the tagger held the filing's silence against it.
+* **DGX**: tagged none, too low (wrong text). Should be higher. Data issue: the input was MD&A, not Item 1. Re-run with the right section.
+* **IDXX**: tagged narrow, too low. Should be higher. A razor-and-blade installed base in vet diagnostics with very high returns on capital.
+* **AME**: tagged none, too low. Should be higher. Two modest sources (niche intangibles and qualification stickiness) and consistently strong margins fit narrow, not none.
+* **LII**: tagged none, too low. Should be higher. Direct distribution and an oligopolistic residential HVAC market.
+* **FICO**: tagged narrow, too low. Should be higher. It is the entrenched standard with extreme pricing power; VantageScore acceptance is the main risk.
+
+Disputed source ratings:
+
+* CMG: intangibles 0 too low; cost_advantage 0 too low
+* MAR: intangibles 1 too low
+* BBT: switching_costs 0 too low; cost_advantage 0 too low
+* COF: network_effects 0 too low; cost_advantage 0 too low
+* MCO: network_effects 0 too low; efficient_scale 0 too low
+* NTRS: switching_costs 0 too low; cost_advantage 0 too low
+* DGX: cost_advantage 0 too low; efficient_scale 0 too low
+* IDXX: switching_costs 1 too low
+* DE: intangibles 1 too low
+* LII: intangibles 0 too low
+* RSG: efficient_scale 1 too low
+* UAL: network_effects 1 too high
+* PANW: intangibles 0 too low
+* VRSN: intangibles 2 too low
+* PKG: switching_costs 0 too low
+* IRM: switching_costs 1 too low
+
+### What the hand check shows
+
+* **One rater, with hindsight.** The verdicts are the user's, made with the company names shown and knowing how the companies fared since; they measure whether the tags look right to an informed reader, not a ground truth. Several are marked low confidence (CHRW, EOG, O).
+* **The tagger errs low.** Of the overall calls the reviewer disputed on the right text, all but one say the moat should be higher, as do 21 of the 22 disputed source ratings, mostly 0s. The reasons given lean on returns: IDXX's returns on capital, AME's margins, CMG's unit economics, and the one call disputed as too high, CCL, because cruising rarely earns its cost of capital. Item 1 has no numbers, so the tagger cannot see returns; NTRS was held to a filing that never describes its custody moat.
+* **A source rated 1 does not force a moat, and that is mostly right.** 18 companies were called none despite a source rated 1; the reviewer agreed on 16 of them.
+* **Wrong text from the section offsets.** In a scan of all 480 10-Ks filed in 2025 that have an Item 1 span, 11 start like MD&A or financial statements in their first 3,000 characters (CL, ZTS, PLD, BALL, DGX, BG, CDNS, LH, O, AFL, MCHP); TTWO's span is wrong too but starts mid-sentence, so the scan misses it. Others run on into Item 1A (REGN, NTAP), which adds risk factors but keeps Item 1.
 
 ## Review sheet
 
