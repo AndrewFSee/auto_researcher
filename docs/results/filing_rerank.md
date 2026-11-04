@@ -1,6 +1,6 @@
 # Re-ranking BM25's top tables with an LLM (RAG step 2)
 
-Generated 2026-10-31 20:32 by `scripts/filing_rerank_eval.py`. Re-ranker `qwen3:8b`, top 10 BM25 tables shown as summaries without numbers.
+Generated 2026-11-04 07:51 by `scripts/filing_rerank_eval.py`. Re-ranker `qwen3:8b`, top 10 BM25 tables shown as summaries without numbers.
 
 | Questions | Gold in candidates | BM25 first table | Re-ranker's pick | Pick, gold in candidates | No valid reply | Seconds / question |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -24,4 +24,4 @@ Generated 2026-10-31 20:32 by `scripts/filing_rerank_eval.py`. Re-ranker `qwen3:
 - Retrieval is no longer the main limit: the right table is among BM25's top 10 for about 90% of questions. The pick is: given the right table among the 10, the re-ranker chooses it 61% of the time (55% paraphrased).
 - The gain is smaller on paraphrased questions (+4.5 points on the pick, against +10.6). The summaries show only the row labels that share a word with the question, so rewording likely hides the rows that would identify the table.
 - Thinking, dev only (all 447 questions): right table 66.7% against 54.4% without thinking. 83 questions are right only with thinking and 28 only without (sign test p = 2e-7). It costs 31.2 s per question against 2.7 s. 4.5% of thinking replies are empty after about 90 s, likely the 4,096-token limit running out mid-thought; those keep BM25's first table.
-- Thinking has not been run on the test sets: about 17 hours for both on this GPU.
+- Thinking on the test sets: see `filing_rerank_think.md`.

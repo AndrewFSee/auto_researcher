@@ -47,6 +47,7 @@ logger = logging.getLogger("filing_rerank_eval")
 
 # Written after the test-set run; the thinking numbers are from the dev run
 # (--sets dev --think), which these test tables do not include.
+# The last line was updated after the thinking run on the test sets.
 FINDINGS = [
     "## Findings", "",
     "- The re-ranker was frozen on dev (commit c305a4c) before either test set was run. On test it "
@@ -62,7 +63,28 @@ FINDINGS = [
     "83 questions are right only with thinking and 28 only without (sign test p = 2e-7). It costs "
     "31.2 s per question against 2.7 s. 4.5% of thinking replies are empty after about 90 s, likely "
     "the 4,096-token limit running out mid-thought; those keep BM25's first table.",
-    "- Thinking has not been run on the test sets: about 17 hours for both on this GPU.",
+    "- Thinking on the test sets: see `filing_rerank_think.md`.",
+]
+
+# Written after the thinking run on both test sets (--sets test test_paraphrased --think),
+# compared with the run without thinking above.
+FINDINGS_THINK = [
+    "## Findings", "",
+    "- Thinking was chosen on dev (66.7% right table against 54.4%) before either test set was run "
+    "with it. The re-ranker's prompt and the 4,096-token limit are unchanged from commit c305a4c.",
+    "- On test, thinking lifts the right table from 55.5% to 69.3% and end-to-end accuracy from 65.8% "
+    "to 77.6%. On the paraphrased questions, 49.0% to 63.7% and 59.0% to 72.8%. About 18 points "
+    "remain to the oracle page (20 paraphrased), against about 30 without thinking.",
+    "- Paired by question: on test, 174 questions get the right table only with thinking and 39 only "
+    "without (sign test p = 2e-21); end to end, 143 against 28 (p = 9e-20). Paraphrased: 184 against "
+    "43 (p = 6e-22); end to end, 155 against 23 (p = 3e-25).",
+    "- Thinking closes most of the paraphrase gap: without it the re-ranker added 4.5 points over "
+    "BM25 on paraphrased questions against 10.6 on test; with it, 19.2 against 24.4.",
+    "- Given the right table among the 10, the re-ranker now chooses it 76% of the time (72% "
+    "paraphrased), against 61% (55%).",
+    "- Cost: 26 to 28 s per question against about 3 s, 7 hours per test set on this GPU. 3.2% of "
+    "replies (4.2% paraphrased) are empty after about 90 s, likely the token limit running out "
+    "mid-thought; those keep BM25's first table.",
 ]
 
 
@@ -183,7 +205,7 @@ def main() -> None:
                 lines.append(f"| {name} | {m} | {pct(np.mean([r['page'] == gold_key(r['id']) for r in recs]))} | "
                              f"{pct(np.mean([r['tolerant'] for r in recs]))} |")
     if "test" in args.sets:
-        lines += ["", *FINDINGS]
+        lines += ["", *(FINDINGS_THINK if args.think else FINDINGS)]
     args.out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     logger.info("wrote %s", args.out)
 
