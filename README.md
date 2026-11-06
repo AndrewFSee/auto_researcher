@@ -33,17 +33,18 @@ A research platform for building equity signals and testing them honestly.
 | Features, round 1 | Do 13 published factors, sector-neutral targets or 500 stocks help? | No. Every candidate's IC was between -0.027 and +0.0003; holdout no better than momentum | [feature_research.md](docs/results/feature_research.md) |
 | Features, round 2 | Do point-in-time earnings features help the ML model? | No. Surprises predict drift in event time (IC +0.03, t 2.5 over 50 quarters) but too weakly for a monthly ranking | [earnings_feature_research.md](docs/results/earnings_feature_research.md) |
 | Earnings drift | Does drift follow surprises vs. analyst consensus? | Yes, in 9 quarters: 40-day drift IC +0.137 (t 3.1), big beats minus big misses +5.2% | [pead_event_study.md](docs/results/pead_event_study.md) |
-| Earnings strategy | Is the drift tradeable? | Analyst surprises: long-short +10.7%/yr gross, Sharpe 1.2 (t 2.0) over 2.3 years, +4.8% net. Year-over-year surprises: about +1%/yr gross, negative net | [earnings_event_strategy.md](docs/results/earnings_event_strategy.md) |
+| Earnings strategy | Is the drift tradeable? | No, not any more. Over 30 years of Alpha Vantage consensus (1996-2026, 502 stocks) long-short makes +4.5%/yr gross (t 1.7) but -2.3% net, and all of the gain is in 1996-2001 (+20.6%/yr gross); since 2010 it is +1.5% gross, -5.5% net. The 2.3-year analyst sample's +9.7% gross (t 1.9) was a favourable window (Alpha Vantage over the same window: +6.9% gross, 0% net). Year-over-year surprises: negative net | [earnings_event_strategy.md](docs/results/earnings_event_strategy.md) |
 | Sentiment | Does the sentiment agent's FinBERT signal predict returns? | No. All 8 pre-specified signal/horizon pairs \|t\| < 1.6; the earlier +0.02 IC came from a leaky backtest | [sentiment_audit.md](docs/results/sentiment_audit.md) |
 | Fundamentals, round 3 | Do six published fundamental factors work point-in-time in large caps? | Mostly no. Only accruals passed (IC +0.020, t 2.3; holdout same sign). Gross profitability, asset growth, issuance, FCF and EBIT yields and their composite did not | [fundamental_factors.md](docs/results/fundamental_factors.md) |
 | ML valuation gap | Does an ML growth forecast plus DCF find mispriced stocks? | Not established. The forecast beats naive growth estimates (rank corr. 0.35 vs 0.18, t 2.2), and the gap had the best IC (+0.029) and holdout portfolio (+7%/yr vs equal weight), but did not beat a naive-forecast gap by the pre-registered margin | [fundamental_factors.md](docs/results/fundamental_factors.md) |
 | FinQA fine-tune | Can a local 8B model learn to answer numerical questions about annual reports with executable programs? | Yes. QLoRA on FinQA's 6,251 training programs lifts Qwen3-8B's execution accuracy on the test set from 53.6% to 76.5% (within 1%: 59% to 79%), above its own free-form answers (71%, p < 1e-9) and the published FinQANet (61%) and APOLLO (71%) results. Runs locally at 3.7 s/question; the test set is public, so absolute scores may be inflated | [finqa_baseline.md](docs/results/finqa_baseline.md) |
 | Filing QA | Does the FinQA fine-tune hold up on real filings it has never seen? | Yes. On 980 questions auto-graded from the inline XBRL of 996 10-Ks filed in 2025-26 (526 companies), the fine-tune scores 95.3% within 1% vs 90.7% untuned (p = 2e-5). It got worse on three-year averages, copying a broken 'add 3, divide by 2' program found in 34 FinQA training labels | [filing_qa.md](docs/results/filing_qa.md) |
 
-**Current best lead:** post-earnings drift measured against analyst consensus.
-It agrees with decades of research, but 2.3 years is too short to rely on. A
-longer consensus history (Alpha Vantage, back to ~1996) is downloading daily via
-`scripts/download_av_earnings.py`; the strategy picks it up at 100 stocks.
+**Where the leads stand:** post-earnings drift against analyst consensus, the
+previous best lead, did not survive a 30-year history: the drift was large in the
+late 1990s and has been too small to trade after costs since (consistent with
+published evidence that it has faded in large caps). The only return signal that
+passed its pre-registered test is accruals (IC +0.020, t 2.3), a small effect.
 
 ## Evaluation toolkit
 

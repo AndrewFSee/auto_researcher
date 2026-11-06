@@ -55,6 +55,15 @@ HOLDS = (20, 40, 60)
 PRIMARY_HOLD = 40
 MIN_VENDOR_SYMBOLS = 100
 VENDOR_SOURCES = {"fmp_consensus": "fmp_earnings", "av_consensus": "av_earnings"}
+# Exploratory split of the decades-long vendor histories (chosen after seeing the
+# yearly returns, so not part of the pre-registered test): the classic drift era,
+# the 2000s, and the years without suspected backfill (see av_earnings_validation.md).
+SUBPERIODS = {
+    "1996-2001": ("1996-01-01", "2001-12-31"),
+    "2002-2009": ("2002-01-01", "2009-12-31"),
+    "2010 on": ("2010-01-01", None),
+    "analyst window": (None, None),  # filled with the analyst sample's start
+}
 
 
 def usable_dates(announce: pd.Series, cal: pd.DatetimeIndex, delay: int = 2) -> pd.Series:
@@ -158,7 +167,7 @@ def main(argv: list[str] | None = None) -> None:
                     ev["usable_date"].min().date(), ev["usable_date"].max().date())
 
     n_trials = len(sources) * len(HOLDS)
-    results, yearly = {}, {}
+    results, yearly, subperiods = {}, {}, {}
     for src, ev in sources.items():
         src_close, src_ew = panels[src]
         for hold in HOLDS:
@@ -184,6 +193,8 @@ def main(argv: list[str] | None = None) -> None:
             }
             if hold == PRIMARY_HOLD:
                 yearly[src] = ls.groupby(ls.index.year).sum()
+                if src in VENDOR_SOURCES:
+                    subperiods[src] = daily[["long", "short", "long_short_net"]]
             s = results[key]["long_short_net"]
             logger.info("%-14s L/S net %+.1f%%/yr  Sharpe %.2f  t %+.2f  maxDD %.1f%%", key,
                         100 * s["ann_return"], s["sharpe"], s["t_stat"], 100 * s["max_drawdown"])
@@ -196,6 +207,20 @@ def main(argv: list[str] | None = None) -> None:
         "long_short_net": return_stats(ts_recent["long_short_net"], n_trials),
         "start": str(a_start.date()),
     }
+
+    # Exploratory sub-periods of the vendor histories (plain statistics, no deflation).
+    split: dict[str, dict[str, dict]] = {}
+    for src, daily in subperiods.items():
+        split[src] = {}
+        for name, (a, b) in SUBPERIODS.items():
+            part = daily.loc[(a or a_start):b]
+            if len(part) < 60:
+                continue
+            split[src][name] = {
+                "start": str(part.index.min().date()),
+                "gross": return_stats(part["long"] - part["short"]),
+                "net": return_stats(part["long_short_net"]),
+            }
 
     def row(label, s):
         if not np.isfinite(s.get("sharpe", np.nan)):
@@ -254,6 +279,20 @@ def main(argv: list[str] | None = None) -> None:
     for y in years:
         cells = [f"{yearly[s].get(y):+.1%}" if y in yearly[s].index else "" for s in yearly]
         md.append(f"| {y} | " + " | ".join(cells) + " |")
+    if split:
+        md += ["", f"## Exploratory: vendor histories by period, {PRIMARY_HOLD}-day hold", "",
+               "Not part of the pre-registered test: the periods were chosen after seeing the "
+               "yearly returns. 1996-2001 is the classic drift era; before 2010 some consensus "
+               "estimates look backfilled (excluded); \"analyst window\" is the `analyst` "
+               "sample's period. Plain statistics, no multiple-testing deflation.", "",
+               "| Strategy | Period | Gross / yr | Gross t | Net / yr | Net t | Sharpe (net) |",
+               "| --- | --- | ---: | ---: | ---: | ---: | ---: |"]
+        for src, periods in split.items():
+            for name, p in periods.items():
+                g, n = p["gross"], p["net"]
+                md.append(f"| `{src}` | {name} (from {p['start']}) | {g['ann_return']:+.1%} | "
+                          f"{g['t_stat']:+.2f} | {n['ann_return']:+.1%} | {n['t_stat']:+.2f} | "
+                          f"{n['sharpe']:.2f} |")
     md += ["", "Survivorship caveat: companies that left the S&P 500 are missing, which flatters "
            "the short leg (failed companies with bad surprises are absent)."]
 
@@ -268,7 +307,8 @@ def main(argv: list[str] | None = None) -> None:
 
     out.with_suffix(".json").write_text(json.dumps(clean({
         "generated": datetime.now().isoformat(timespec="seconds"), "n_trials": n_trials,
-        "results": results, "yearly": {k: v.to_dict() for k, v in yearly.items()}}), indent=2),
+        "results": results, "yearly": {k: v.to_dict() for k, v in yearly.items()},
+        "exploratory_subperiods": split}), indent=2),
         encoding="utf-8")
     logger.info("Wrote %s.md/.json", out)
 
