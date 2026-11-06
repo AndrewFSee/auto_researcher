@@ -19,6 +19,7 @@ from auto_researcher.llm.filing_questions import (
 from auto_researcher.llm.filings import (
     finqa_text,
     load_filing,
+    parse_chunks,
     parse_filing,
     read_filing_header,
     render_cell,
@@ -189,6 +190,23 @@ def test_share_questions_only_use_components_of_a_total(pages):
 
 def test_rows_with_two_values_per_year_are_skipped(pages):
     assert not any("deferred taxes" in q.question for q in page_questions(pages[1]))
+
+
+def test_parse_chunks_adds_untagged_tables_and_text_with_the_same_indexes(pages):
+    untagged_table = (
+        "<table><tr><td></td><td>2025</td><td>2024</td></tr>"
+        "<tr><td>Employees</td><td>1,200</td><td>1,100</td></tr></table>"
+        "<p>" + "Our people are our strength and we invest in them every year. " * 5 + "</p>"
+    )
+    html = HTML.replace(b"<table><tr><td>Signatures", untagged_table.encode() + b"<table><tr><td>Signatures")
+    all_pages, text = parse_chunks(html)
+    assert [p.index for p in all_pages if p.facts] == [p.index for p in pages]  # same as parse_filing
+    untagged = [p for p in all_pages if not p.facts]
+    assert len(untagged) == 1 and untagged[0].table[1] == ("employees", "1200", "1100")
+    assert untagged[0].n_header_rows == 1
+    assert not any("signatures" in r[0] for p in all_pages for r in p.table)  # no numbers: skipped
+    assert any("our people are our strength" in " ".join(t.sentences) for t in text)
+    assert all(sum(len(s) for s in t.sentences) >= 200 for t in text)
 
 
 def test_clean_label_strips_footnotes_and_operators():
