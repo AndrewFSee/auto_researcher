@@ -1,6 +1,6 @@
 # Moat tagger v3: set `fresh`
 
-Generated 2026-11-02 18:12 by `scripts/moat_pilot.py`, set `fresh`, model `claude-sonnet-5-5`, prompts `claude-sonnet-5-5__ca6bf1d1a__high`. One call per company over Item 1 (business) and five years of financials, prompt v3: quotes checked word for word against the text, each moat source rated from the verified quotes only (`auto_researcher.llm.moat`).
+Generated 2026-11-07 14:04 by `scripts/moat_pilot.py`, set `fresh`, model `claude-sonnet-5-5`, prompts `claude-sonnet-5-5__ca6bf1d1a__high`. One call per company over Item 1 (business) and five years of financials, prompt v3: quotes checked word for word against the text, each moat source rated from the verified quotes only (`auto_researcher.llm.moat`).
 
 * Companies: 50 (50 rated); chunks read 50 (Item 1 cut at 16 chunks for 0).
 * Quotes returned: 395; kept 394; not found in the text 0 (0.0%); duplicates 1; over the cap 0; unparseable replies 0.
@@ -83,8 +83,58 @@ Generated 2026-11-02 18:12 by `scripts/moat_pilot.py`, set `fresh`, model `claud
 
 * **What changed from v1.** The prompt adds the company's financial history and a step judging returns on capital before the overall call (`ONE_CALL_SYSTEM_V2`); sources are still rated from quotes only. Item 1 texts that start mid-sentence or hold MD&A or financial statement headings early are not tagged (`item1_problem`).
 * **Tuned on the hand-checked set, then frozen.** Against the targets the 47 v1 verdicts imply, v2 (fixed rules: high returns plus a source rated 1 meant narrow, one 8-10% cost of capital) put 34 overall calls on target and moved weak resellers up and utilities down; v3 (returns corroborate the text, a lower cost of capital for utilities and REITs) put 39. A second run of the unchanged v1 prompt put 36, and 4 of 47 calls changed between the two identical v1 runs, so v3's lead is small. v3 was committed (bfcd03b) before the fresh set was tagged once.
-* **The fresh set** is 50 companies in no earlier set, drawn the same way (sector-stratified, seed 1) from the 2025 10-Ks that pass the Item 1 check; its tags await the same hand check.
+* **The fresh set** is 50 companies in no earlier set, drawn the same way (sector-stratified, seed 1) from the 2025 10-Ks that pass the Item 1 check; its tags were checked blind (`moat_v3_fresh.md`).
 * **The financial history is point-in-time:** SEC XBRL company facts filed on or before the 10-K's filing date (the 10-K's own figures included), the latest value known then for each fiscal year (`data.sec_fundamentals.build_pit_table`). ROIC is operating income after a 21% tax over average equity + debt - cash; ratios on negative or near-zero capital are shown as n/a.
+
+## Blind check
+
+50 companies marked on a review page that hid the name, ticker and sector and shuffled the order, showing what the tagger saw (marks in `data/moat/blind_verdicts.json`). After marking a company the reviewer revealed it and could change any mark. AMZN, IPG, T had been marked on the named page first, so they are left out of the blind rows.
+
+| Companies | Overall agreed | Too high | Too low | Source ratings agreed | Too high | Too low |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| all (50) | 42 (84%) | 0 | 8 | 234 of 250 (94%) | 0 | 16 |
+| marked blind (47) | 40 (85%) | 0 | 7 | 223 of 235 (95%) | 0 | 12 |
+| blind, not recognized (37) | 36 (97%) | 0 | 1 | 182 of 185 (98%) | 0 | 3 |
+| blind, recognized (10) | 4 (40%) | 0 | 6 | 41 of 50 (82%) | 0 | 9 |
+
+Marks changed after the reveal: 0 of 50 companies.
+
+| Tag | Marked blind | Agreed |
+| --- | ---: | ---: |
+| none | 23 | 18 |
+| narrow | 22 | 20 |
+| wide | 2 | 2 |
+
+Disputed overall calls ("too low" = the moat should be higher):
+
+* **AMZN**: tagged none, returns above, too low (marked on the named page first). WIDE: Differs: recognized company (Amazon); 10-K text understates marketplace network effects, logistics scale and AWS lock-in, and returns are above cost of capital.
+* **PG**: tagged narrow, returns above, too low (recognized while blind). WIDE: Disagree, upgrade to wide: recognizably P&G; category-leading brands plus distribution and advertising scale have sustained ~20% ROIC and 22-24% margins for decades despite private label.
+* **AJG**: tagged none, returns near, too low. NARROW: Insurance brokers have sticky client relationships and high retention; low ROE reflects acquisition goodwill while FCF margins are strong. Narrow rather than none.
+* **BK**: tagged none, returns near, too low (recognized while blind). NARROW: Disagree mildly: recognizably BNY Mellon; custody and servicing for $52T of assets are deeply embedded and scale-driven, though ROE has mostly trailed the cost of equity.
+* **BSX**: tagged none, returns below, too low (recognized while blind). NARROW: Disagree with none: recognizably Boston Scientific; FDA approvals, first-in-class devices and physician familiarity give lasting protection, and low ROIC reflects acquisition goodwill while operating margins are rising to 16%.
+* **RMD**: tagged none, returns above, too low (recognized while blind). NARROW: Disagree with none: the excerpt is only regulatory, but ROIC of 24-31% and 27-33% operating margins sustained for five years strongly suggest a device franchise (possibly ResMed) with modest regulatory and installed-base advantages.
+* **TDG**: tagged narrow, returns above, too low (recognized while blind). WIDE: Disagree, upgrade to wide: recognizably TransDigm; ~90% proprietary, sole-source certified parts with 25-30+ year aftermarket tails and 35-47% operating margins point to very durable pricing power.
+* **TYL**: tagged none, returns below, too low (recognized while blind). NARROW: Disagree with none: recognizably Tyler; ~2% annual client turnover on mission-critical government systems is strong switching cost, and low ROIC mainly reflects NIC acquisition goodwill.
+
+Disputed source ratings:
+
+* AMZN: intangibles 0 too low; switching_costs 0 too low; network_effects 0 too low; cost_advantage 0 too low
+* PG: intangibles 1 too low; cost_advantage 0 too low
+* AJG: switching_costs 0 too low
+* BK: switching_costs 0 too low
+* RMD: intangibles 0 too low; switching_costs 0 too low
+* EMR: switching_costs 0 too low
+* TDG: intangibles 1 too low; switching_costs 1 too low
+* AKAM: switching_costs 0 too low
+* FTNT: switching_costs 0 too low
+* TYL: switching_costs 1 too low
+
+### What the blind check shows
+
+* **Blind, v3 agrees with the reviewer as often as v1 did with names shown.** 40 of 47 overall calls and 223 of 235 source ratings, against 40 of 47 and 215 of 235 for the v1 tags of the first set. Every dispute says the moat should be higher (7 overall calls, 12 source ratings); none says lower.
+* **The reveal changed no mark** (0 of 50), but the blinding was partial: the notes name 10 of the 47 companies while still blind. Disputes sit almost entirely there: 6 of the 10 recognized companies were called too low (BSX, TDG, PG, RMD, BK, TYL), against 1 of the 37 that were not (AJG). On the text and financials alone, the tagger and the reviewer agree on 36 of 37 overall calls.
+* **What that does and does not show.** The recognized companies are the well-known franchises, where Item 1 most understates the moat, so the disputes may be outside knowledge (and hindsight) rather than misreading. The tagger is not meant to use that knowledge: a point-in-time tag should rest on what the filing says. The low-side errors are where a text-only tagger is expected to fall short.
+* **Acquisition goodwill.** Three disputes (BSX, TYL, AJG) say low returns reflect acquired goodwill. ROIC over equity + debt - cash counts goodwill as capital, so serial acquirers look as if they barely earn their cost of capital. A return on tangible capital would address it, but as a new prompt it would need freezing and another fresh set.
 
 ## Review sheet
 

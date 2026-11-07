@@ -153,11 +153,32 @@ V2_NOTES = [
     "of 47 calls changed between the two identical v1 runs, so v3's lead is small. v3 was committed (bfcd03b) "
     "before the fresh set was tagged once.",
     "**The fresh set** is 50 companies in no earlier set, drawn the same way (sector-stratified, seed 1) from "
-    "the 2025 10-Ks that pass the Item 1 check; its tags await the same hand check.",
+    "the 2025 10-Ks that pass the Item 1 check; its tags were checked blind (`moat_v3_fresh.md`).",
     "**The financial history is point-in-time:** SEC XBRL company facts filed on or before the 10-K's filing "
     "date (the 10-K's own figures included), the latest value known then for each fiscal year "
     "(`data.sec_fundamentals.build_pit_table`). ROIC is operating income after a 21% tax over average equity "
     "+ debt - cash; ratios on negative or near-zero capital are shown as n/a.",
+]
+# Fresh-set companies marked on the named review page before the blind one existed.
+SEEN_NAMED = {"AMZN", "IPG", "T"}
+# Companies the reviewer's notes name while still blind (from products, scale or the financials).
+RECOGNIZED = {"BSX", "BK", "CSGP", "ECL", "EMR", "FTV", "PG", "RMD", "TDG", "TYL"}
+BLIND_NOTES = [
+    "**Blind, v3 agrees with the reviewer as often as v1 did with names shown.** 40 of 47 overall calls and "
+    "223 of 235 source ratings, against 40 of 47 and 215 of 235 for the v1 tags of the first set. Every "
+    "dispute says the moat should be higher (7 overall calls, 12 source ratings); none says lower.",
+    "**The reveal changed no mark** (0 of 50), but the blinding was partial: the notes name 10 of the 47 "
+    "companies while still blind. Disputes sit almost entirely there: 6 of the 10 recognized companies were "
+    "called too low (BSX, TDG, PG, RMD, BK, TYL), against 1 of the 37 that were not (AJG). On the text and "
+    "financials alone, the tagger and the reviewer agree on 36 of 37 overall calls.",
+    "**What that does and does not show.** The recognized companies are the well-known franchises, where "
+    "Item 1 most understates the moat, so the disputes may be outside knowledge (and hindsight) rather than "
+    "misreading. The tagger is not meant to use that knowledge: a point-in-time tag should rest on what the "
+    "filing says. The low-side errors are where a text-only tagger is expected to fall short.",
+    "**Acquisition goodwill.** Three disputes (BSX, TYL, AJG) say low returns reflect acquired goodwill. "
+    "ROIC over equity + debt - cash counts goodwill as capital, so serial acquirers look as if they barely "
+    "earn their cost of capital. A return on tangible capital would address it, but as a new prompt it "
+    "would need freezing and another fresh set.",
 ]
 SHORT = {"intangibles": "intang", "switching_costs": "switch", "network_effects": "network",
          "cost_advantage": "cost", "efficient_scale": "eff.scale"}
@@ -456,6 +477,51 @@ def hand_check(results: list[dict], verdicts: dict) -> list[str]:
     return lines + ["", "### What the hand check shows", ""] + [f"* {n}" for n in HAND_CHECK_NOTES]
 
 
+def blind_check(results: list[dict], blind: dict) -> list[str]:
+    """Score the tags against marks made with the company hidden, and what the reveal changed."""
+    pct = "{:.0%}".format
+    rows = [(r["ticker"], r["rating"], blind[r["ticker"]]) for r in results
+            if r["rating"] and r["ticker"] in blind]
+    lines = ["", "## Blind check", "",
+             f"{len(rows)} companies marked on a review page that hid the name, ticker and sector and shuffled "
+             "the order, showing what the tagger saw (marks in `data/moat/blind_verdicts.json`). After marking a "
+             "company the reviewer revealed it and could change any mark. "
+             f"{', '.join(sorted(SEEN_NAMED))} had been marked on the named page first, so they are left out of "
+             "the blind rows.", "",
+             "| Companies | Overall agreed | Too high | Too low | Source ratings agreed | Too high | Too low |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    groups = [("all", lambda t: True), ("marked blind", lambda t: t not in SEEN_NAMED),
+              ("blind, not recognized", lambda t: t not in SEEN_NAMED | RECOGNIZED),
+              ("blind, recognized", lambda t: t in RECOGNIZED)]
+    for label, keep in groups:
+        sub = [v["blind"] for t, _, v in rows if keep(t)]
+        ov = Counter(v["overall"] for v in sub)
+        src = Counter(v["sources"][k] for v in sub for k in SOURCES)
+        lines.append(f"| {label} ({len(sub)}) | {ov['agree']} ({pct(ov['agree'] / len(sub))}) | {ov['high']} | "
+                     f"{ov['low']} | {src['agree']} of {sum(src.values())} ({pct(src['agree'] / sum(src.values()))})"
+                     f" | {src['high']} | {src['low']} |")
+    changed = [t for t, _, v in rows if v["after"] and v["after"] != v["blind"]]
+    lines += ["", f"Marks changed after the reveal: {len(changed)} of {len(rows)} companies"
+              + (f" ({', '.join(changed)})." if changed else "."), "",
+              "| Tag | Marked blind | Agreed |", "| --- | ---: | ---: |"]
+    for m in MOATS:
+        sub = [v for t, g, v in rows if g["overall"]["moat"] == m and t not in SEEN_NAMED]
+        lines.append(f"| {m} | {len(sub)} | {sum(v['blind']['overall'] == 'agree' for v in sub)} |")
+    lines += ["", "Disputed overall calls (\"too low\" = the moat should be higher):", ""]
+    for t, g, v in rows:
+        if v["blind"]["overall"] != "agree":
+            lines.append(f"* **{t}**: tagged {g['overall']['moat']}, returns {g['returns']['verdict']}, too "
+                         f"{v['blind']['overall']}{' (marked on the named page first)' if t in SEEN_NAMED else ''}"
+                         f"{' (recognized while blind)' if t in RECOGNIZED else ''}. {v['note']}")
+    lines += ["", "Disputed source ratings:", ""]
+    for t, g, v in rows:
+        bad = [f"{k} {g[k]['rating']} too {v['blind']['sources'][k]}" for k in SOURCES
+               if v["blind"]["sources"][k] != "agree"]
+        if bad:
+            lines.append(f"* {t}: {'; '.join(bad)}")
+    return lines + ["", "### What the blind check shows", ""] + [f"* {n}" for n in BLIND_NOTES]
+
+
 def _target(old: int, verdict: str, levels: int) -> set[int]:
     """The ratings a verdict on ``old`` accepts: the same one, or any higher or lower."""
     if verdict == "low" and old < levels - 1:
@@ -585,6 +651,9 @@ def cmd_report(args) -> None:
                                   baselines)
     if args.prompt != "v1":
         lines += ["", "## Notes", ""] + [f"* {n}" for n in V2_NOTES]
+    blind = DATA / "blind_verdicts.json"
+    if args.set == "fresh" and blind.exists():
+        lines += blind_check(results, json.loads(blind.read_text(encoding="utf-8")))
     lines += ["", "## Review sheet", "",
               "For each company: what it does (the opening of Item 1, name hidden), the overall call, then each "
               "source rated above 0 with the model's reason and the quotes it cites, and the quotes against a "
