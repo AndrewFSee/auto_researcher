@@ -28,6 +28,7 @@ that the README cites.
 | `pead_event_study.py` | Earnings surprise vs. announcement reaction and post-announcement drift; writes `docs/results/pead_event_study.*` |
 | `earnings_event_strategy.py` | Event-driven long/short earnings-drift strategy (analyst and year-over-year surprises, plus vendor histories once 100+ stocks are cached); writes `docs/results/earnings_event_strategy.*` |
 | `sentiment_audit.py` | Point-in-time audit of the sentiment agent's FinBERT signal with a timing ablation; writes `docs/results/sentiment_audit.*` |
+| `analyst_ratings_strategy.py` | Pre-registered in `docs/results/analyst_ratings_protocol.md`: rating changes and price-target revisions as long/short event signals; writes `docs/results/analyst_ratings_strategy.*` |
 | `validate_signal_ic.py` | Walk-forward IC, Newey-West and deflated Sharpe for any `(date, ticker, score)` signal or event file; refuses events dated at fiscal period ends |
 
 ## Fundamentals and valuation
@@ -37,12 +38,24 @@ that the README cites.
 | `build_fundamentals.py` | Download SEC XBRL company facts for the S&P 500 and build the point-in-time fundamentals table (first-reported values, usable after the filing date, TTM from year-to-date figures); writes `docs/results/sec_fundamentals_validation.md` |
 | `reverse_dcf.py` | Reverse DCF: the 10-year FCF growth each company's enterprise value implies, beside its past growth and value/quality ratios; writes `docs/results/reverse_dcf.*`, or `--tickers AAPL KO` for a console view |
 
+## Filing tools (local models in Ollama)
+
+| Script | Purpose |
+| --- | --- |
+| `finqa_baseline.py` | Score an Ollama model on FinQA (`--kind finqa`) or the filing questions (`--kind filings`) in `program`, `cot_program` or `direct` mode; resumable; writes `docs/results/finqa_baseline.*` (`--report` for another path, such as `filing_qa.md`) |
+| `build_filing_qa.py` | Auto-graded FinQA-style questions from the inline XBRL of 10-K / 10-Q filings stored by sentiq (read-only) |
+| `paraphrase_filing_questions.py` | Rewrite those questions the way an analyst would ask them, with mechanical checks that the calculation is unchanged |
+| `filing_rag_eval.py` | Retrieval within a filing (BM25, embeddings, hybrid), then answering from the top table; writes `docs/results/filing_rag.*` |
+| `filing_rerank_eval.py` | An LLM re-ranks BM25's top tables (`--think` for the thinking variant), then the fine-tuned model answers; writes `docs/results/filing_rerank*.md` |
+| `moat_pilot.py` | Moat tagger: `sample` companies, `tag` their 10-Ks (Ollama or Claude), `report` the tags and the hand checks; writes `docs/results/moat_*.md` |
+
 ## Data ingestion
 
 | Script | Purpose |
 | --- | --- |
 | `download_av_earnings.py` | Alpha Vantage earnings history (consensus back to ~1996; 25 requests/day, resumable; refreshes files older than 30 days once complete); writes `docs/results/av_earnings_validation.md` |
 | `schedule_av_download.ps1` | Register a daily Windows scheduled task for `download_av_earnings.py` (`-Time 07:30` to change the time, `-Remove` to delete it); logs to `data/logs/av_download.log` |
+| `download_analyst_ratings.py` | Yahoo analyst rating actions for the S&P 500, cross-checked against FMP; writes `docs/results/analyst_ratings_validation.md` |
 | `download_fmp_earnings.py` | FMP earnings history (~250 requests/day on the free plan, which serves only popular stocks); writes `docs/results/fmp_earnings_validation.md` |
 | `scrape_sp500.py`, `async_scraper.py`, `update_news.py`, `fill_missing_articles.py` | Build and refresh `data/news.db` (the scrapers need `aiohttp`, in the `research` extra) |
 | `score_news_sentiment.py` | FinBERT-score scraped articles |

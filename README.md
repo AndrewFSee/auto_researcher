@@ -11,6 +11,10 @@ A research platform for building equity signals and testing them honestly.
 * **A leakage-safe evaluation toolkit**: a purged walk-forward harness, an
   event-driven strategy simulator, causality and leakage tests, deflated
   statistics and random-portfolio baselines.
+* **Filing-reading LLM tools**: a local 8B model fine-tuned to answer
+  numerical questions about 10-Ks, retrieval that finds the right table in a
+  filing, and a moat tagger that rates competitive advantages from a 10-K with
+  quotes checked against the text.
 * **Analyst tooling**: a multi-agent pipeline that researches a shortlist of
   stocks (filings, earnings calls, insider trades, news, fundamentals) with a
   Streamlit dashboard and optional LLM review.
@@ -34,17 +38,27 @@ A research platform for building equity signals and testing them honestly.
 | Features, round 2 | Do point-in-time earnings features help the ML model? | No. Surprises predict drift in event time (IC +0.03, t 2.5 over 50 quarters) but too weakly for a monthly ranking | [earnings_feature_research.md](docs/results/earnings_feature_research.md) |
 | Earnings drift | Does drift follow surprises vs. analyst consensus? | Yes, in 9 quarters: 40-day drift IC +0.137 (t 3.1), big beats minus big misses +5.2% | [pead_event_study.md](docs/results/pead_event_study.md) |
 | Earnings strategy | Is the drift tradeable? | No, not any more. Over 30 years of Alpha Vantage consensus (1996-2026, 502 stocks) long-short makes +4.5%/yr gross (t 1.7) but -2.3% net, and all of the gain is in 1996-2001 (+20.6%/yr gross); since 2010 it is +1.5% gross, -5.5% net. The 2.3-year analyst sample's +9.7% gross (t 1.9) was a favourable window (Alpha Vantage over the same window: +6.9% gross, 0% net). Year-over-year surprises: negative net | [earnings_event_strategy.md](docs/results/earnings_event_strategy.md) |
+| Analyst ratings | Do rating changes or price-target revisions predict returns? | No. Pre-registered, 2013-2026: the stock moves on the day of an upgrade or downgrade (+1.6% / -1.9% vs SPY), then nothing. Rating changes earn -0.1%/yr gross after day +1 (t -0.04), -7.1% net (holdout -3.4%); price-target revisions +3.6% gross (t 0.7), noise | [analyst_ratings_strategy.md](docs/results/analyst_ratings_strategy.md) |
 | Sentiment | Does the sentiment agent's FinBERT signal predict returns? | No. All 8 pre-specified signal/horizon pairs \|t\| < 1.6; the earlier +0.02 IC came from a leaky backtest | [sentiment_audit.md](docs/results/sentiment_audit.md) |
 | Fundamentals, round 3 | Do six published fundamental factors work point-in-time in large caps? | Mostly no. Only accruals passed (IC +0.020, t 2.3; holdout same sign). Gross profitability, asset growth, issuance, FCF and EBIT yields and their composite did not | [fundamental_factors.md](docs/results/fundamental_factors.md) |
 | ML valuation gap | Does an ML growth forecast plus DCF find mispriced stocks? | Not established. The forecast beats naive growth estimates (rank corr. 0.35 vs 0.18, t 2.2), and the gap had the best IC (+0.029) and holdout portfolio (+7%/yr vs equal weight), but did not beat a naive-forecast gap by the pre-registered margin | [fundamental_factors.md](docs/results/fundamental_factors.md) |
 | FinQA fine-tune | Can a local 8B model learn to answer numerical questions about annual reports with executable programs? | Yes. QLoRA on FinQA's 6,251 training programs lifts Qwen3-8B's execution accuracy on the test set from 53.6% to 76.5% (within 1%: 59% to 79%), above its own free-form answers (71%, p < 1e-9) and the published FinQANet (61%) and APOLLO (71%) results. Runs locally at 3.7 s/question; the test set is public, so absolute scores may be inflated | [finqa_baseline.md](docs/results/finqa_baseline.md) |
 | Filing QA | Does the FinQA fine-tune hold up on real filings it has never seen? | Yes. On 980 questions auto-graded from the inline XBRL of 996 10-Ks filed in 2025-26 (526 companies), the fine-tune scores 95.3% within 1% vs 90.7% untuned (p = 2e-5). It got worse on three-year averages, copying a broken 'add 3, divide by 2' program found in 34 FinQA training labels | [filing_qa.md](docs/results/filing_qa.md) |
+| Filing retrieval | Can the model find the right table itself, given a whole 10-K? | Mostly. BM25's first table is right 45% of the time (embeddings and hybrid do worse); a local Qwen3-8B re-ranker with thinking, choosing among BM25's top 10, gets 69%, and answers are right within 1% 77.6% of the time vs 53.4% with BM25 alone and 95.3% given the right page (sign test p = 9e-20). On analyst-style rephrased questions: 72.8%. Costs 26 s per question | [filing_rag.md](docs/results/filing_rag.md), [filing_rerank_think.md](docs/results/filing_rerank_think.md) |
+| Moat tagger | Can an LLM rate a company's moat sources from its 10-K, citing the text? | Yes, by hand check. Claude Sonnet 5.5 reads Item 1 and five years of financials ($0.04 a company); every quote is checked word for word. On 50 fresh companies, prompt frozen, reviewed blind (name and ticker hidden): 85% of overall calls and 95% of source ratings agreed; every dispute said the moat should be higher, mostly for companies the reviewer recognized. Not yet tested as a return signal | [moat_v3_fresh.md](docs/results/moat_v3_fresh.md) |
 
-**Where the leads stand:** post-earnings drift against analyst consensus, the
-previous best lead, did not survive a 30-year history: the drift was large in the
-late 1990s and has been too small to trade after costs since (consistent with
-published evidence that it has faded in large caps). The only return signal that
-passed its pre-registered test is accruals (IC +0.020, t 2.3), a small effect.
+**Where the project stands:** no return signal tested here is strong enough to
+trade. Post-earnings drift against analyst consensus, the best lead, did not
+survive a 30-year history: it was large in the late 1990s and has been too small
+to trade after costs since (consistent with published evidence that it has faded
+in large caps). The only return signal that passed its pre-registered test is
+accruals (IC +0.020, t 2.3), a small effect; the ML valuation gap had the highest
+IC (+0.029) but was not significant. The positive results are the filing-reading
+tools: a local model that answers numerical questions about real 10-Ks (95% given
+the right page, 78% finding the page itself) and a moat tagger that agrees with a
+blind human review 85% of the time. Turning these into point-in-time signals is
+untested; the moat tags are not point-in-time yet, since the model knows how the
+companies turned out.
 
 ## Evaluation toolkit
 
@@ -92,6 +106,11 @@ print(result.summary()["ic_mean"], result.summary()["net_ir_vs_equal_weight"])
 | Purged walk-forward splits, deflated Sharpe | `validation/` |
 | Guard against event data keyed on fiscal period ends | `validation/event_dates.py` |
 | Evidence-based weights (signed, sample-size-shrunk ICs) | `composite.py` |
+| Analyst rating actions (Yahoo, cross-checked against FMP) | `data/analyst_ratings.py` |
+| FinQA programs: parsing, execution, scoring | `llm/finqa.py` |
+| Filing pages from inline XBRL, auto-graded questions from tagged facts | `llm/filings.py`, `llm/filing_questions.py` |
+| Retrieval within a filing (BM25, embeddings, hybrid) and an LLM re-ranker | `llm/retrieval.py` |
+| Moat tagger with quote verification (Ollama or Claude) | `llm/moat.py` |
 
 Every feature builder has a causality test: perturbing future prices or
 filings must not change any earlier value
@@ -141,7 +160,9 @@ agents read. The composite weights each agent by its out-of-sample evidence:
 | Insider clusters, filing tone, earnings-call quality, thematic | Not yet measured | Prior (13%) |
 
 Weights come from `data/agent_ic.json`, written by
-`scripts/calibrate_ic_weights.py` from the reports in `docs/results/`.
+`scripts/calibrate_ic_weights.py` from the reports in `docs/results/`. The
+earnings-drift weight rests on the 9-quarter event study; the 30-year history
+since found the drift too small to trade, which the weights do not yet reflect.
 
 ## Quick start
 
@@ -158,7 +179,7 @@ pytest -q
 | Extra | Adds |
 | --- | --- |
 | `nlp` | torch, transformers, sentence-transformers, ChromaDB (sentiment, filings, transcripts) |
-| `llm` | litellm, gpt-researcher (LLM review, deep research) |
+| `llm` | litellm, gpt-researcher, anthropic (LLM review, deep research, moat tagger) |
 | `dashboard` | Streamlit |
 | `research` | matplotlib, aiohttp (news scrapers) |
 
@@ -176,8 +197,19 @@ python scripts/feature_research.py
 python scripts/earnings_feature_research.py
 python scripts/earnings_event_strategy.py
 python scripts/sentiment_audit.py
+python scripts/analyst_ratings_strategy.py
 python scripts/calibrate_ic_weights.py          # refresh agent weights from the reports
+
+# Filing tools (local models served by Ollama; see scripts/README.md)
+python scripts/finqa_baseline.py --model qwen3-finqa --modes program
+python scripts/filing_rerank_eval.py --sets test test_paraphrased --think --model qwen3-finqa
+python scripts/moat_pilot.py report --set fresh --model claude-sonnet-5-5
 ```
+
+The filing tools read 10-Ks stored by the sister project
+[sentiq](https://github.com/AndrewFSee/sentiq) and run models locally in
+[Ollama](https://ollama.com); the fine-tuned `qwen3-finqa` model is built from
+the FinQA training set (see [finqa_baseline.md](docs/results/finqa_baseline.md)).
 
 The research scripts download prices (yfinance), S&P 500 membership
 (Wikipedia) and SEC filing/EPS histories (DefeatBeta) into
@@ -196,6 +228,7 @@ src/auto_researcher/
 │                  # point-in-time fundamental factors, valuation and reverse DCF
 ├── data/          # Prices (with offline cache), SEC point-in-time fundamentals,
 │                  # FMP / Alpha Vantage earnings, news scraper, vector stores
+├── llm/           # FinQA programs, filing pages and questions, retrieval, moat tagger
 ├── agents/        # Sentiment, LLM review, deep research
 ├── models/        # PEAD, quality-value, insider cluster, filing tone, earnings-call quality,
 │                  # sector momentum and rotation, early adopter, XGBoost ranker, growth forecast
@@ -213,8 +246,12 @@ app.py             # Streamlit dashboard
   studies add each stock only from its index add date, but companies that later
   left the index are missing. Compare against the equal-weight portfolio of the
   same names, and treat absolute returns as optimistic.
-* **Short histories.** Point-in-time analyst consensus is available only from
-  late 2023, and dense news coverage only from 2024.
+* **Short histories.** Point-in-time fundamentals start around 2010 (SEC XBRL),
+  dense news coverage in 2024. Earnings consensus goes back to 1996 (Alpha
+  Vantage) and analyst rating actions to 2013.
+* **Lookahead in LLM judgments.** Models trained on recent text know how
+  companies turned out, so LLM ratings of past filings (the moat tags) carry
+  hindsight; numbers extracted from a filing do not.
 * **Unmeasured agents.** Insider, filing-tone, earnings-call and thematic agents
   have no out-of-sample measurement yet.
 * **Research software.** Nothing here is investment advice.
