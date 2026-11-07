@@ -48,6 +48,7 @@ nlp = [
 llm = [
     "litellm>=1.30",
     "gpt-researcher>=0.8",
+    "anthropic>=1.13",
 ]
 # Streamlit dashboard
 dashboard = [
