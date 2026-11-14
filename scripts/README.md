@@ -48,6 +48,7 @@ that the README cites.
 | `filing_rag_eval.py` | Retrieval within a filing (BM25, embeddings, hybrid), then answering from the top table; writes `docs/results/filing_rag.*` |
 | `filing_rerank_eval.py` | An LLM re-ranks BM25's top tables (`--think` for the thinking variant), then the fine-tuned model answers; writes `docs/results/filing_rerank*.md` |
 | `moat_pilot.py` | Moat tagger: `sample` companies, `tag` their 10-Ks (Ollama or Claude), `report` the tags and the hand checks; writes `docs/results/moat_*.md` |
+| `customer_links.py` | Customer-supplier links: `extract` each 10-K's major customers and their share of revenue (quotes checked word for word), read the `xbrl` concentration tags, `report` the links with the XBRL check and the hand check; writes `docs/results/customer_links_count.md` |
 
 ## Data ingestion
 
