@@ -182,6 +182,47 @@ _ANY_SHARE = re.compile(r"\d\s?%|\d\s+percent|\bten percent", re.I)
 # "international site leasing revenue"), read just before the heading's last "revenue"/"sales".
 _PART_BASE = re.compile(r"international|domestic|segment|product|leasing|commodit")
 HEADING_CHARS = 60
+# A share stated for a group of customers ("our top five customers accounted for approximately
+# 27% of net sales: BNSF Railway, ..."), unless the quote gives each member's own share ("three
+# wholesalers ... each accounted for between 14 percent and 21 percent", "... respectively").
+_CUSTOMERS = r"(?:customers|clients|purchasers|distributors|wholesalers|wholesale distributors)"
+_GROUP = re.compile(
+    r"\b(?:(?:top|largest|biggest)\s+(?:\w+\s+)?|(?:two|three|four|five|six|seven|eight|nine|ten|\d+)\s+"
+    r"(?:largest\s+|biggest\s+|major\s+|principal\s+)?)" + _CUSTOMERS + r"\b|\bin (?:the )?aggregate\b|\baggregate of\b",
+    re.I)
+_EACH = re.compile(r"\beach\b|\brespectively\b|\bindividually\b|\bseparately\b", re.I)
+_OWN_PARTS = re.compile(r"\b(?:its|their)\s+(?:agencies|affiliates|subsidiaries|divisions)\b", re.I)
+_NEXT_SHARE = re.compile(r"\s*(?:%|percent)?\s*(?:,|and|,\s*and)\s*(?:approximately\s+)?\d+(?:\.\d+)?\s?(?:%|percent)", re.I)
+_SENTENCE_END = re.compile(r"[.;]\s+(?=[A-Z])")
+GROUP_CHARS = 150  # how far after the group's words its share may be
+
+
+def group_share(percent: float, quote: str, name: str = "") -> bool:
+    """Is ``percent`` the share of a group of customers the quote names, not one customer's:
+    the first percentage after a group's words ("top five customers", "in the aggregate"),
+    within ``GROUP_CHARS`` and the same sentence, and not the first of a list of members' own
+    shares ("two customers accounted for 19 percent and 17 percent"). Not when the quote gives
+    each member's share ("each", "respectively"), the share right after the customer's name is
+    its own (a table row under a heading about "the three largest wholesalers": "McKesson
+    Corporation 24 % 22 % 21 %"), or the aggregate is of one customer's parts ("the U.S.
+    government and its agencies represented in the aggregate approximately 10%")."""
+    if percent <= 0 or _EACH.search(quote):
+        return False
+    at = quote.lower().find(name.lower()) if name else -1
+    if at >= 0:
+        own = _SHARE.search(quote, at + len(name), at + len(name) + 20)
+        if own and abs(float(own.group()) - percent) <= 0.5:
+            return False
+    for m in _GROUP.finditer(quote):
+        if "aggregate" in m.group().lower() and _OWN_PARTS.search(quote):
+            continue
+        first = _SHARE.search(quote, m.end(), m.end() + GROUP_CHARS)
+        if not first or abs(float(first.group()) - percent) > 0.5:
+            continue
+        if _SENTENCE_END.search(quote, m.end(), first.start()) or _NEXT_SHARE.match(quote, first.end()):
+            continue
+        return True
+    return False
 
 
 def check_customer(c: dict, excerpts: str) -> str | None:
@@ -189,7 +230,8 @@ def check_customer(c: dict, excerpts: str) -> str | None:
     a named customer's name must be in the quote, a stated percentage must be in the quote
     (and at most 100), a share without a percentage needs one in the quote ("10% or more"), the quote
     must mention revenue or sales, and not purchases from suppliers ("our five suppliers
-    represented 55% of merchandise purchased")."""
+    represented 55% of merchandise purchased"), and the percentage must not be a group's
+    (``group_share``)."""
     name, quote = " ".join(str(c.get("customer", "")).split()), " ".join(str(c.get("quote", "")).split())
     percent = float(c.get("percent") or 0)
     if not name or not verify_quote(quote, excerpts):
@@ -204,6 +246,8 @@ def check_customer(c: dict, excerpts: str) -> str | None:
         return "no_revenue_in_quote"
     if _PURCHASES.search(quote):
         return "purchases"
+    if group_share(percent, quote, name):
+        return "group_share"
     return None
 
 
@@ -340,6 +384,21 @@ ALIASES: dict[str, tuple[str, int]] = {
     "claro": ("AMX", 1129137),
 }
 
+# Customer names whose leading words are a listed company's short name but which are another
+# company, or no company: (ticker, CIK) of the company meant, or None. Checked before any other
+# match, longest key first; keys as in ``ALIASES``. From a review of every prefix match, and every
+# link to a company named by common words, in the 2018-2025 10-Ks.
+SEPARATE: dict[str, tuple[str, int] | None] = {
+    "cocacolaeuropean": ("CCEP", 1650107),    # Coca-Cola European Partners (Europacific since 2021), not KO
+    "cocacolaeuropacific": ("CCEP", 1650107),
+    "cocacolabottlerssales": None,            # the bottlers' purchasing cooperative, not KO
+    "sunocologistics": ("ET", 1276187),       # merged into Energy Transfer in 2017; not Sunoco LP (SUN)
+    "emerging": None,                         # "Emerging Markets" regions and funds, not Emerging Holdings
+    "metronewyork": None,                     # a region, not Metro Inc.
+    "lightmanufacturing": None,               # an industry, not Light S.A.
+    "amerenillinois": None,                   # Ameren's own subsidiary
+}
+
 
 class TickerIndex:
     """SEC's list of listed companies by core name, for matching customer names."""
@@ -372,6 +431,9 @@ class TickerIndex:
             return None
         compact = self._compact_names()
         for n in range(len(core), 0, -1):
+            if "".join(core[:n]) in SEPARATE:
+                return SEPARATE["".join(core[:n])]
+        for n in range(len(core), 0, -1):
             head = "".join(core[:n])
             if head in compact and (n > 1 or (len(head) >= 4 and head not in _GENERIC_FIRST)):
                 return compact[head]
@@ -398,16 +460,25 @@ class TickerIndex:
         """(ticker, cik, "exact" | "alias" | "prefix") for a customer name, or None. An alias is
         an ``ALIASES`` key as the customer's leading words (longest wins); a prefix match is a
         listed company's core name as the leading words of the customer's (longest wins), not
-        a single generic or short word. Names are compared without spaces or punctuation
+        a single generic or short word, in a name written with a capital ("joint ventures in
+        which we have a controlling interest" is no company). A name in ``SEPARATE`` gets the
+        company given there, or none. Names are compared without spaces or punctuation
         ("Wal-Mart Stores" = "Walmart Stores")."""
         compact = self._compact_names()
         words = [re.sub(r"[^a-z0-9]", "", w) for w in core_name(name).split()]
         words = [w for w in words if w]
+        for n in range(len(words), 0, -1):
+            if "".join(words[:n]) in SEPARATE:
+                other = SEPARATE["".join(words[:n])]
+                return (*other, "alias") if other else None
         if "".join(words) in compact:
             return (*compact["".join(words)], "exact")
         for n in range(len(words), 0, -1):
             if "".join(words[:n]) in ALIASES:
                 return (*ALIASES["".join(words[:n])], "alias")
+        first = re.search(r"[A-Za-z]", name)
+        if not first or first.group().islower():
+            return None
         for n in range(len(words) - 1, 0, -1):
             head = words[:n]
             if n == 1 and (len(head[0]) < 4 or head[0] in _GENERIC_FIRST):

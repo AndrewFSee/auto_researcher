@@ -65,6 +65,38 @@ def test_check_customer_needs_quote_name_percent_and_revenue():
     assert check_customer(_c("Delta", 10, vol), vol) == "no_revenue_in_quote"
 
 
+def test_a_share_stated_for_a_group_of_customers_is_not_one_customers():
+    wab = ("For the fiscal year ended December 31, 2019, our top five customers accounted for approximately 27% of "
+           "net sales: BNSF Railway, Canadian National Railway, Indian Railways, Komatsu Ltd. and Union Pacific Railroad.")
+    assert check_customer(_c("Union Pacific Railroad", 27, wab), wab) == "group_share"
+    cci = ("Our four largest customers are AT&T, T-Mobile, Verizon Wireless and Sprint. Collectively, these four "
+           "customers accounted for 83% of our 2017 site rental revenues.")
+    assert check_customer(_c("AT&T", 83, cci), cci) == "group_share"
+    # Each member's own share: a table row under the group's heading, "each", "respectively".
+    bmy = ("Gross revenue to the three largest pharmaceutical wholesalers in the U.S. as a percentage of global gross "
+           "revenues was as follows: Year Ended December 31, 2019 2018 2017 McKesson Corporation 26 % 25 % 24 %")
+    assert check_customer(_c("McKesson Corporation", 26, bmy), bmy) is None
+    lly = ("In 2019, 2018, and 2017, three wholesale distributors in the U.S. - McKesson Corporation, AmerisourceBergen "
+           "Corporation, and Cardinal Health, Inc. - each accounted for between 14 percent and 21 percent of our "
+           "consolidated total revenue")
+    assert check_customer(_c("McKesson Corporation", 14, lly), lly) is None
+    pxd = ("Sunoco Logistics Partners L.P., Occidental Energy Marketing Inc. and Plains Marketing L.P accounted for "
+           "36 percent, 18 percent and 14 percent of the Company's oil and gas revenues, respectively.")
+    assert check_customer(_c("Plains Marketing L.P", 14, pxd), pxd) is None
+    # A group mentioned beside one customer's own share.
+    both = "Our ten largest customers accounted for 45% of net sales, and Walmart alone accounted for 20% of net sales."
+    assert check_customer(_c("Walmart", 20, both), both) is None
+    # Members' own shares listed without "respectively"; a share in the next sentence; one customer's parts.
+    has = ("In 2017 the Company's largest customers were Wal-Mart Stores, Inc., Toys\"R\"Us, Inc. and Target "
+           "Corporation. Sales to these customers amounted to 19 % , 9 % and 9 % , of consolidated net revenues")
+    assert check_customer(_c("Wal-Mart Stores, Inc.", 19, has), has) is None
+    nbl = ("BP North American Funding (BP) and Shell Trading (US) (Shell) were the largest single purchasers of our "
+           "2017 production. Sales to BP accounted for 10% of 2017 total crude oil, natural gas and NGL sales revenues")
+    assert check_customer(_c("BP North American Funding (BP)", 10, nbl), nbl) is None
+    rht = "the U.S. government and its agencies represented in the aggregate approximately 10% of our total revenue."
+    assert check_customer(_c("U.S. government and its agencies", 10, rht), rht) is None
+
+
 def test_collect_customers_dedupes_prefers_total_revenue_and_moves_receivables():
     table = ("The following table summarizes those customers with accounts receivable equal to 10% or more: "
              "Distributor A 29 % 26 %")
@@ -100,6 +132,20 @@ def test_ticker_matching_exact_prefix_former_names_and_generic_words():
     assert index.match("Union") is None
     assert index.match("McLane Company, Inc.") == ("BRK-B", 1067983, "alias")  # a Berkshire subsidiary
     assert index.match("Walgreens Boots Alliance, Inc.") == ("WBA", 1618921, "alias")  # off SEC's current list
+
+
+def test_names_that_share_a_short_form_with_a_listed_company_are_not_it():
+    index = TickerIndex([("KO", "COCA COLA CO", 21344), ("SUN", "Sunoco LP", 1552275),
+                         ("EMRH", "EMERGING HOLDINGS INC", 1300306), ("JYNT", "JOINT Corp", 1612630),
+                         ("SHEL", "Shell plc", 1306965)])
+    assert index.match("The Coca-Cola Company") == ("KO", 21344, "exact")
+    assert index.match("Coca-Cola European Partners") == ("CCEP", 1650107, "alias")
+    assert index.match("Coca-Cola Bottlers' Sales & Services Company LLC") is None
+    assert index.match("Sunoco Logistics Partners L.P.") == ("ET", 1276187, "alias")  # part of Energy Transfer
+    assert index.match("Emerging Markets") is None and index.match("Emerging") is None
+    assert index.match("joint ventures in which we have a controlling interest") is None  # no capital: no company
+    assert index.match("Shell Trading (US) Company") == ("SHEL", 1306965, "prefix")
+    assert index.match_member("mnst:CocaColaEuropeanPartnersMember") == ("CCEP", 1650107)
 
 
 def test_table_rows_take_their_base_from_the_heading_and_respectively_lists_line_up():

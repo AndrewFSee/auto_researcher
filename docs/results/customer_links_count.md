@@ -1,27 +1,27 @@
 # Customer-supplier links: feasibility count (2024 10-Ks)
 
-Generated 2026-11-14 14:01 by `scripts/customer_links.py`, model `qwen3:8b`, prompt `97826f76`. No returns were computed.
+Generated 2026-11-17 16:25 by `scripts/customer_links.py`, model `qwen3:8b`, prompt `97826f76`. No returns were computed.
 
 * 10-Ks filed in 2024 (one per company, sentiq's lake): 516; with text near a customer mention and a percentage of revenue or sales: 446; model calls 519 (1.2 h).
-* Customers returned 1247; dropped: quote not in the text 78, named customer not in its quote 84, percentage not in the quote 112, no percentage in the quote 37, quote without revenue or sales 45, purchases from suppliers 21; unparseable replies 0. Percentages lined up with their names in "…, respectively" lists: 1.
+* Customers returned 1247; dropped: quote not in the text 78, named customer not in its quote 84, percentage not in the quote 112, no percentage in the quote 37, quote without revenue or sales 45, purchases from suppliers 21, a group's share 37; unparseable replies 0. Percentages lined up with their names in "…, respectively" lists: 1.
 * 10-Ks stating no customer reached 10%: 159.
 
 ## Count
 
 | | Companies |
 | --- | ---: |
-| Any customer with a share of total or segment revenue | 302 |
+| Any customer with a share of total or segment revenue | 293 |
 | A *named* customer (total or segment revenue) | 161 |
 | **A named, listed customer with 10%+ of total revenue (a link)** | **60** |
-| Only a segment-level link | 3 |
+| Only a segment-level link | 2 |
 
-Links: 91 (exact name match 64, alias 18, prefix 9); distinct customers 46.
+Links: 91 (exact name match 63, alias 19, prefix 9); distinct customers 46.
 
 Customers by kind (total or segment revenue):
 
-* named and matched to a listed company: 113
-* named, not matched (private, government, foreign, or a name the matcher misses): 219
-* not named ("Customer A", "one customer"): 245
+* named and matched to a listed company: 112
+* named, not matched (private, government, foreign, or a name the matcher misses): 217
+* not named ("Customer A", "one customer"): 218
 
 Most common unmatched names: United States (6); Russia (3); U.S. government (3); Customer A (3); Distributor A (3); Distributor B (3); Distributor C (3); Customer B (2); Customer C (2); retail customers (2); EGPC (2); CFE International (2); Japan (2); Florida (2); Samsung Electronics Co., Ltd. (2); F-35 program (1); U.S. government tenants (1); Investment-grade or publicly traded large cap tenants (1); GMI (1); GMNA (1); U.S. government (including foreign military sales through the U.S. government) (1); MEGlobal (1); Ukraine (1); Germany (1); Airbus (1)
 
@@ -29,11 +29,11 @@ Most common unmatched names: United States (6); Russia (3); U.S. government (3);
 
 516 filings read; 116 tag a customer with 10% or more of revenue for the year reported (209 customer members).
 
-* Filings where the text extraction found a customer: 105 of 116.
+* Filings where the text extraction found a customer: 104 of 116.
 * Tagged customers whose percentage (within 1 point) the extraction found: 151 of 209.
-* Missed filings: BALL, CCI, COP, DXCM, LIN, LLY, MRNA, PKG, STZ, TFX, VRTX.
-* Tagged members naming a listed company (supplier, customer pairs): 79; found as links in the text: 65. Not found: BALL → KO (TheCocaColaCompanyMember), BMY → CAH (CardinalHealthIncMember), BMY → COR (CencoraMember), BMY → MCK (MckessonCorporationMember), CCI → TMUS (TMobileMember), CCI → VZ (VerizonWirelessMember), LIN → MBIN (MerchantMember), MNST → KO (CocaColaCompanyMember), MSCI → BLK (BlackrockIncMember), NEM → JPM (JpMorganChaseMember), NEM → RY (RoyalBankOfCanadaMember), NEM → TD (TorontoDominionBankMember), SBAC → VIV (TelefonicaMember), VRTX → MCK (McKessonCorporationMember).
-* Text links in filings that tag customers but not that one: AMGN → CAH, AMGN → COR, AMGN → MCK, AMT → T, ANET → META, ANET → MSFT, CF → CHSCP, EA → MSFT, EA → SONY, FFIV → INGM, FFIV → SNX, MCK → CVS, MNST → CCEP, NTAP → SNX, QCOM → AAPL, SBAC → TIMB, SWKS → AAPL, TTWO → AAPL, TTWO → GOOGL, TTWO → MSFT, TTWO → SONY.
+* Missed filings: BALL, BMY, CCI, COP, DXCM, LIN, LLY, MRNA, PKG, STZ, TFX, VRTX.
+* Tagged members naming a listed company (supplier, customer pairs): 80; found as links in the text: 66. Not found: BALL → KO (TheCocaColaCompanyMember), BMY → CAH (CardinalHealthIncMember), BMY → COR (CencoraMember), BMY → MCK (MckessonCorporationMember), CCI → TMUS (TMobileMember), CCI → VZ (VerizonWirelessMember), LIN → MBIN (MerchantMember), MNST → KO (CocaColaCompanyMember), MSCI → BLK (BlackrockIncMember), NEM → JPM (JpMorganChaseMember), NEM → RY (RoyalBankOfCanadaMember), NEM → TD (TorontoDominionBankMember), SBAC → VIV (TelefonicaMember), VRTX → MCK (McKessonCorporationMember).
+* Text links in filings that tag customers but not that one: AMGN → CAH, AMGN → COR, AMGN → MCK, AMT → T, ANET → META, ANET → MSFT, CF → CHSCP, EA → MSFT, EA → SONY, FFIV → INGM, FFIV → SNX, MCK → CVS, NTAP → SNX, QCOM → AAPL, SBAC → TIMB, SWKS → AAPL, TTWO → AAPL, TTWO → GOOGL, TTWO → MSFT, TTWO → SONY.
 * Tagged members not matched to a listed company (most are unnamed: Customer A, one customer): CustomerOneMember (12); CustomerAMember (8); OneCustomerMember (6); LargestCustomerMember (5); CustomerCMember (4); CustomerBMember (4); CustomerTwoMember (4); CustomerDMember (3); USGovernmentMember (3); DistributorAMember (3); DistributorBMember (3); DistributorCMember (3); FixedPriceContractMember (3); FederalGovernmentMember (2); SalesChannelDirectlyToConsumerMember (2); SalesChannelThroughIntermediaryMember (2); ThreeLargestWholesalesMember (2); EgyptianGeneralPetroleumCompanyMember (2); OfficeDepotMember (2); GroupPurchasingOrganizationsMember (2); DellIncMember (1); LenovoGroupLimitedMember (1); HPInc.Member (1); USGovernmentContractsMember (1); USFederalGovernmentMember (1); VolkswagenMember (1); NetRevenuesLargestCustomerMember (1); CustomerEMember (1); DoDAndUSIntelligenceCommunityMember (1); CustomerThreeMember (1).
 
 ## Hand check
@@ -41,6 +41,7 @@ Most common unmatched names: United States (6); Russia (3); U.S. government (3);
 The 81 total-revenue links of the first report were checked by hand on 2026-11-14 against the passages the model read: correct 68, not a revenue customer 7, wrong % or year 6. The rules below were then added and tuned on those marks, so the 2024 figures after them are in-sample; another year needs its own check.
 
 * Rules added after the check: a quote about purchases from suppliers is dropped; a share without a percentage needs one in the quote ("10% or more"); a table row under a heading for part of the company's revenue (product, segment, international) is a segment share; percentages in "A and B … 18% and 21%, respectively" are lined up with the names; an alias table maps subsidiaries, short names and delisted companies to tickers.
+* Rules added after the blind check of the 2020 10-Ks (`report_2020.md`): a share stated for a group of customers ("our top five customers accounted for 27%") is dropped; names that share a short form with a listed company but are another firm or none (Coca-Cola European Partners, Sunoco Logistics, "Emerging Markets") get the company meant or none (`SEPARATE`); a prefix match needs a name written with a capital.
 * Checked links the rules keep: 73 (correct 68, wrong % or year 5); dropped: 8 (not a revenue customer 7, wrong % or year 1).
 * Percentages the rules corrected: ANET → Meta Platforms 18% → 21%.
 * Precision of the kept links, as marked, counting corrected percentages as correct: 69 of 73 (95%).
@@ -69,7 +70,6 @@ The 81 total-revenue links of the first report were checked by hand on 2026-11-1
 | ANET | Microsoft | MSFT | exact | 18 | total revenue | 2023 | correct |
 | ARNC | General Electric Company | GE | exact | 12 | total revenue | 2023 | correct |
 | AXP | Delta | DAL | alias | 10 | total revenue | 2023 | not checked |
-| BSX | Emerging Markets | EMRH | prefix | 16 | segment revenue | 2023 | not a revenue customer |
 | BWA | Ford | F | alias | 14 | total revenue | 2023 | not checked |
 | CAG | Walmart, Inc. and its affiliates | WMT | exact | 28 | total revenue | 2024 | correct |
 | CAH | CVS Health | CVS | exact | 24 | total revenue | 2024 | correct |
@@ -109,7 +109,7 @@ The 81 total-revenue links of the first report were checked by hand on 2026-11-1
 | MKC | Wal-Mart Stores, Inc. | WMT | exact | 12 | total revenue | 2023 | correct |
 | MKC | PepsiCo, Inc. | PEP | exact | 13 | total revenue | 2023 | correct |
 | MNST | Coca-Cola Consolidated, Inc. | COKE | exact | 10 | total revenue | 2023 | correct |
-| MNST | Coca-Cola Europacific Partners | CCEP | exact | 13 | total revenue | 2023 | correct |
+| MNST | Coca-Cola Europacific Partners | CCEP | alias | 13 | total revenue | 2023 | correct |
 | MO | Performance Food Group Company | PFGC | exact | 25 | total revenue | 2023 | correct |
 | MO | McLane Company, Inc. | BRK-B | alias | 23 | total revenue | 2023 | not checked |
 | MRO | Marathon Petroleum Corporation | MPC | exact | 22 | total revenue | 2023 | correct |

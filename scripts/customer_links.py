@@ -232,6 +232,43 @@ def link_rows(res: list[dict], index: TickerIndex) -> list[dict]:
 VERDICT = {"ok": "correct", "company": "wrong company", "number": "wrong % or year", "notrev": "not a revenue customer"}
 
 
+def blind_check(rows: list[dict], checks: dict) -> list[str]:
+    """A blind hand check of a random sample of one year's links, made under the rules of
+    ``checks["rules"]``: the checker confirmed the company and typed the share read in the
+    passage without seeing the model's; a link is correct if the company is right and the
+    share agrees within half a point. Then what the current rules do with the checked links."""
+    marked = [c for c in checks["rows"] if c["kind"] == "link"]
+    now = {(r["supplier"], r["customer"]): r for r in rows}
+    fmt = lambda t: ", ".join(f"{VERDICT[v]} {n}" for v, n in t.most_common())  # noqa: E731
+    total = Counter(c["verdict"] for c in marked)
+    real = [c for c in marked if c["verdict"] == "ok" or (c["verdict"] == "number" and c["read_share"] in ("threshold", "figure")
+                                                          and (c["read_share"] == "threshold" or float(c["read_figure"]) >= 10))]
+    kept = [c for c in marked if now.get((c["supplier"], c["customer"]), {}).get("link")
+            and now[(c["supplier"], c["customer"])]["match"][0] == c["ticker"]]
+    gone = [c for c in marked if c not in kept]
+    k_t = Counter(c["verdict"] for c in kept)
+    lines = [
+        "", "## Blind hand check", "",
+        f"A {checks['sample']}, checked by hand on {checks['checked']} under the rules at {checks['rules']}, before any "
+        "rule was tuned on this year. The checker saw each passage and the matched ticker but not the model's "
+        "percentage; a link is correct if the company is right and the share read agrees within half a point.",
+        "",
+        f"* Under the rules at {checks['rules']}: {fmt(total)}; precision {total['ok']} of {len(marked)} "
+        f"({total['ok'] / len(marked):.0%}). A real link (the listed company, 10% or more of total revenue, whatever the "
+        f"exact figure): {len(real)} of {len(marked)}.",
+        "* Wrong links and figures: " + "; ".join(
+            f"{c['supplier']} → {c['ticker']} ({VERDICT[c['verdict']]}: {c['customer']}, model {c['percent']:g}%, read "
+            f"{c['read_figure'] + '%' if c['read_share'] == 'figure' else c['read_share'] or 'n/a'})"
+            for c in marked if c["verdict"] != "ok") + ".",
+        f"* The rules added after this check (a group's share; names in `SEPARATE`; prefix matches need a capital) keep "
+        f"{len(kept)} of the checked links ({fmt(k_t)}) and drop or rematch {len(gone)}: "
+        + ("; ".join(f"{c['supplier']} → {c['ticker']} ({VERDICT[c['verdict']]})" for c in gone) or "none")
+        + f". Precision of the kept links: {k_t['ok']} of {len(kept)} ({k_t['ok'] / max(len(kept), 1):.0%}), in-sample "
+        "for those rules.",
+    ]
+    return lines
+
+
 def hand_check(rows: list[dict], checks: dict) -> list[str]:
     """The hand check of an earlier report's links (keyed by supplier and customer as
     written) against the current rules: which checked links the rules keep or drop, and which
@@ -255,6 +292,10 @@ def hand_check(rows: list[dict], checks: dict) -> list[str]:
         "one in the quote (\"10% or more\"); a table row under a heading for part of the company's revenue (product, segment, "
         "international) is a segment share; percentages in \"A and B … 18% and 21%, respectively\" are lined up with "
         "the names; an alias table maps subsidiaries, short names and delisted companies to tickers.",
+        "* Rules added after the blind check of the 2020 10-Ks (`report_2020.md`): a share stated for a group of "
+        "customers (\"our top five customers accounted for 27%\") is dropped; names that share a short form with a "
+        "listed company but are another firm or none (Coca-Cola European Partners, Sunoco Logistics, \"Emerging "
+        "Markets\") get the company meant or none (`SEPARATE`); a prefix match needs a name written with a capital.",
     ]
     # A wrong percentage the rules have corrected counts as correct.
     fixed = [k for k in kept if marked[k]["verdict"] == "number" and now[k]["percent"] != marked[k]["percent"]]
@@ -335,7 +376,7 @@ def cmd_report(args) -> None:
         f"customer not in its quote {counts['name_not_in_quote']}, percentage not in the quote "
         f"{counts['percent_not_in_quote']}, no percentage in the quote "
         f"{counts['no_share_in_quote']}, quote without revenue or sales {counts['no_revenue_in_quote']}, "
-        f"purchases from suppliers {counts['purchases']}; unparseable replies {counts['unparsed']}. Percentages "
+        f"purchases from suppliers {counts['purchases']}, a group's share {counts['group_share']}; unparseable replies {counts['unparsed']}. Percentages "
         f"lined up with their names in \"…, respectively\" lists: {counts['realigned']}.",
         f"* 10-Ks stating no customer reached 10%: {sum(r['no_major_customer'] for r in res)}.",
         "",
@@ -414,7 +455,7 @@ def cmd_report(args) -> None:
     check_path = DATA / f"hand_check_{args.year}.json"
     checks = json.loads(check_path.read_text(encoding="utf-8")) if check_path.exists() else None
     if checks:
-        lines += hand_check(rows, checks)
+        lines += blind_check(rows, checks) if checks.get("blind") else hand_check(rows, checks)
 
     verdict = {(c["supplier"], c["customer"]): c["verdict"] for c in (checks or {}).get("rows", []) if c["kind"] == "link"}
     lines += ["", "## Links", "", "| Supplier | Customer (as written) | Ticker | Match | % | Share of | Year | Hand check |",
