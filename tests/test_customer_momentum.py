@@ -10,7 +10,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from customer_momentum import links_at, monthly, portfolio, signals  # noqa: E402
+from customer_momentum import fama_macbeth, links_at, monthly, own_slopes, portfolio, residual_signal, signals  # noqa: E402
 
 
 def _filing(cik, filed, customers, ticker="SUP"):
@@ -62,3 +62,22 @@ def test_signal_is_share_weighted_and_portfolio_takes_thirds_with_costs():
     assert abs(row["gross"] - (np.mean([0.01 * i for i in range(20, 30)]) - np.mean([0.01 * i for i in range(10, 20)]))) < 1e-12
     assert abs(row["turnover"] - 2.0) < 1e-12 and abs(row["net"] - (row["gross"] - 0.002)) < 1e-12
     assert portfolio(sig[(sig["month"] == ends[1]) & (sig["supplier"] < "S29")], 3).empty  # under 30 suppliers
+
+
+def test_residual_sort_removes_the_own_return_and_the_regression_recovers_known_slopes():
+    rng = np.random.default_rng(0)
+    rows = []
+    for m in pd.date_range("2020-01-31", periods=6, freq="ME"):
+        own = rng.normal(0, 0.05, 40)
+        cm = 0.5 * own + rng.normal(0, 0.03, 40)
+        fwd = 0.2 * cm - 0.1 * own + 0.01
+        rows += [{"month": m, "hold": m + pd.offsets.MonthEnd(1), "supplier": f"S{i:02d}", "cm": c, "own": o,
+                  "fwd": f, "customers": "A"} for i, (c, o, f) in enumerate(zip(cm, own, fwd))]
+    sig = pd.DataFrame(rows)
+    res = residual_signal(sig)
+    for _, g in res.groupby("month"):
+        assert abs(g["cm"].mean()) < 1e-12 and abs(np.corrcoef(g["cm"], g["own"])[0, 1]) < 1e-9
+    b, b0 = fama_macbeth(sig)
+    assert np.allclose(b, 0.2) and np.allclose(own_slopes(sig), -0.1)
+    assert (b0 < 0.2).all()  # without the control the reversal pulls the slope down
+    assert len(portfolio(res, 3)) == 6

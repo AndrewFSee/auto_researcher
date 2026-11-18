@@ -65,6 +65,8 @@ LAKE = SENTIQ / "lake" / "items" / "src=edgar_periodic"
 TICKERS = SENTIQ / "ref" / "company_tickers.json"  # SEC's list, fetched 2026-10-09
 FILING_INDEX = ROOT / "data" / "filingqa" / "filing_index.json"
 MIN_PERCENT = 10.0
+FIRST_LAKE_YEAR = 2018
+EARLY = DATA / "early_10k"  # 10-Ks filed 2009-2017, from scripts/download_early_10ks.py
 
 
 def _iso(period: str | None) -> str | None:
@@ -73,7 +75,21 @@ def _iso(period: str | None) -> str | None:
 
 
 def load_10ks(year: int) -> list[dict]:
-    """10-Ks filed in ``year`` from sentiq's lake, one per company (the first filed)."""
+    """10-Ks filed in ``year`` from sentiq's lake, one per company (the first filed). Before
+    2018 (the lake's first year), the filings ``download_early_10ks.py`` stored the same way."""
+    if year < FIRST_LAKE_YEAR:
+        path = EARLY / f"{year}.jsonl.gz"
+        if not path.exists():
+            raise SystemExit(f"{path} not found: run scripts/download_early_10ks.py first")
+        rows = {}
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            for line in fh:
+                r = json.loads(line)
+                row = {k: r[k] for k in ("ticker", "cik", "accession", "company", "filed", "period")}
+                row["text"] = flatten(r["text"])
+                if row["cik"] not in rows or row["filed"] < rows[row["cik"]]["filed"]:
+                    rows[row["cik"]] = row
+        return sorted(rows.values(), key=lambda r: (r["filed"], r["ticker"]))
     table = ds.dataset(LAKE, format="parquet", partitioning="hive").to_table(
         columns=["tickers", "meta", "body_text"],
         filter=pc.starts_with(ds.field("ym"), str(year)) & pc.match_substring(ds.field("title"), " 10-K "))
