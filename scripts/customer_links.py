@@ -199,6 +199,22 @@ def _latest(concs: list[dict], period: str | None) -> list[dict]:
     return [c for c in concs if abs((date.fromisoformat(c["end"]) - end).days) <= 20]
 
 
+def xbrl_pairs(res: list[dict], xbrl: dict, index: TickerIndex) -> dict[tuple[str, str], dict]:
+    """(supplier, customer ticker) -> {"member", "percent", "accession"} for the customers a
+    filing tags in inline XBRL at 10% or more of revenue, for the fiscal year it reports, whose
+    member names a listed company other than the filer (the first tagged percentage)."""
+    pairs: dict[tuple[str, str], dict] = {}
+    for r in res:
+        for c in _latest(xbrl.get(r["accession"]) or [], r["period"]):
+            if c["percent"] < MIN_PERCENT:
+                continue
+            m = index.match_member(c["member"])
+            if m and m[1] != r["cik"]:
+                pairs.setdefault((r["ticker"], m[0]), {"member": c["member"], "percent": c["percent"],
+                                                       "accession": r["accession"]})
+    return pairs
+
+
 def link_rows(res: list[dict], index: TickerIndex) -> list[dict]:
     """One row per customer, with its ticker match and whether it counts as a link: named,
     listed, not the filer itself, 10% or more of total revenue (or a 10% threshold), for the
@@ -422,14 +438,9 @@ def cmd_report(args) -> None:
         missed = [r["ticker"] for r in has if r not in found]
         # Named members that match a listed company: the links XBRL alone gives.
         links = {(r["supplier"], r["match"][0]) for r in rows if r["link"] or r["segment_link"]}
-        xbrl_links, unmatched_members = {}, Counter()
-        for r in has:
-            for c in tagged[r["accession"]]:
-                m = index.match_member(c["member"])
-                if m and m[1] != r["cik"]:
-                    xbrl_links[(r["ticker"], m[0])] = c["member"]
-                elif m is None:
-                    unmatched_members[c["member"].split(":")[-1]] += 1
+        xbrl_links = {k: v["member"] for k, v in xbrl_pairs(res, xbrl, index).items()}
+        unmatched_members = Counter(c["member"].split(":")[-1] for r in has for c in tagged[r["accession"]]
+                                    if index.match_member(c["member"]) is None)
         both = [k for k in xbrl_links if k in links]
         lines += [
             "",
