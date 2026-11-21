@@ -101,6 +101,14 @@ def month_ends() -> pd.DatetimeIndex:
     return pd.DatetimeIndex(s.groupby(days.to_period("M")).max().to_numpy())
 
 
+def sample_ends() -> pd.DatetimeIndex:
+    """The 2018-2026 month-ends: those the cached monthly returns were built on, once they exist.
+    sentiq's price files keep a rolling window (on 2026-11-18 SPY began 2018-11-19), so
+    re-reading SPY later would lose the early months."""
+    ends = pd.DatetimeIndex(pd.read_parquet(RETURNS).index) if RETURNS.exists() else month_ends()
+    return ends[(ends >= FIRST_SIGNAL) & (ends <= LAST_SIGNAL + pd.offsets.MonthEnd(1))]
+
+
 def _sentiq_tri(ticker: str) -> tuple[pd.Series, str] | None:
     """Daily total-return index from a sentiq price file (closes are split-adjusted; each
     dividend is added back on the first session on or after its ex-date)."""
@@ -372,8 +380,7 @@ def _fmt(s: dict, pct: bool = True) -> str:
 
 def cmd_run(args) -> None:
     filings = link_filings()
-    ends = month_ends()
-    ends = ends[(ends >= FIRST_SIGNAL) & (ends <= LAST_SIGNAL + pd.offsets.MonthEnd(1))]
+    ends = sample_ends()
     tickers = _all_tickers(filings)
     check = json.loads(SOURCE_CHECK.read_text(encoding="utf-8")) if SOURCE_CHECK.exists() else {"source": {}, "compare": {}}
     if RETURNS.exists() and set(tickers) <= set(pd.read_parquet(RETURNS).columns) | {t for t, s in check["source"].items() if s == "none"}:
@@ -528,8 +535,7 @@ def late_slopes() -> pd.Series:
     """The 2018-2026 primary slopes (for the pooled figure, information only)."""
     if not RETURNS.exists():
         return pd.Series(dtype=float)
-    ends = month_ends()
-    ends = ends[(ends >= FIRST_SIGNAL) & (ends <= LAST_SIGNAL + pd.offsets.MonthEnd(1))]
+    ends = sample_ends()
     filings = link_filings(years=YEARS)
     sig = signals(links_at(filings, ends), pd.read_parquet(RETURNS).reindex(ends), ends)
     return fama_macbeth(sig)[0]
@@ -586,7 +592,10 @@ def cmd_run_early(args) -> None:
         "",
         f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/customer_momentum.py run-early`, under the rules "
         "pre-registered in [customer_momentum_2010_protocol.md](customer_momentum_2010_protocol.md). Deviations from "
-        "the protocol: none.",
+        "the protocol: none. The first run (2026-11-18 17:17) gave the same primary result; its pooled row, "
+        "information only, was wrong (191 months, +0.074) because the 2018-2026 month-ends were re-read from "
+        "sentiq's SPY file, which had been cut to a rolling window that morning. They now come from the cached "
+        "2018-2026 returns, which reproduce that test exactly.",
         "",
         f"**Result: {verdict}.** The monthly Fama-MacBeth slope of suppliers' next-month return on their customers' "
         f"return, controlling for their own month-t return, averaged {primary['mean']:+.3f} (Newey-West t = "
