@@ -47,6 +47,7 @@ A research platform for building equity signals and testing them honestly.
 | Filing retrieval | Can the model find the right table itself, given a whole 10-K? | Mostly. BM25's first table is right 45% of the time (embeddings and hybrid do worse); a local Qwen3-8B re-ranker with thinking, choosing among BM25's top 10, gets 69%, and answers are right within 1% 77.6% of the time vs 53.4% with BM25 alone and 95.3% given the right page (sign test p = 9e-20). On analyst-style rephrased questions: 72.8%. Costs 26 s per question | [filing_rag.md](docs/results/filing_rag.md), [filing_rerank_think.md](docs/results/filing_rerank_think.md) |
 | Moat tagger | Can an LLM rate a company's moat sources from its 10-K, citing the text? | Yes, by hand check. Claude Sonnet 5.5 reads Item 1 and five years of financials ($0.04 a company); every quote is checked word for word. On 50 fresh companies, prompt frozen, reviewed blind (name and ticker hidden): 85% of overall calls and 95% of source ratings agreed; every dispute said the moat should be higher, mostly for companies the reviewer recognized. Not yet tested as a return signal | [moat_v3_fresh.md](docs/results/moat_v3_fresh.md) |
 | Customer momentum | Do major customers' returns predict their suppliers' next month (Cohen & Frazzini)? | No. Pre-registered, S&P 500 suppliers 2018-2026: 912 links to listed customers with 10%+ of revenue, read from 10-Ks by a local Qwen3-8B (every quote checked; blind check 85% correct). Tercile long-short +0.13%/month net (t 0.33, 104 months), +0.38% gross (t 1.01); the test detects about 1%/month, so it rules out the paper's 1.5%, not a smaller effect | [customer_momentum.md](docs/results/customer_momentum.md), [protocol](docs/results/customer_momentum_protocol.md) |
+| Customer momentum, retest | Does the one positive secondary measure, the regression slope controlling for the supplier's own return (+0.075, t 2.40 in 2018-2026), hold in earlier years? | No. Pre-registered on 4,892 10-Ks filed 2009-2017 (831 links): slope +0.051 (t 1.60, 96 months), the same sign at two-thirds the size, short of t 2.0. The tradeable form, terciles on customer momentum net of own return, makes +0.23%/month net (t 0.76) | [customer_momentum_2010.md](docs/results/customer_momentum_2010.md), [protocol](docs/results/customer_momentum_2010_protocol.md) |
 
 **Where the project stands:** no return signal tested here is strong enough to
 trade. Post-earnings drift against analyst consensus, the best lead, did not
@@ -55,7 +56,7 @@ to trade after costs since (consistent with published evidence that it has faded
 in large caps). The only return signal that passed its pre-registered test is
 accruals (IC +0.020, t 2.3), a small effect; the ML valuation gap had the highest
 IC (+0.029) but was not significant, and customer momentum (suppliers following
-their major customers' returns) was null. The positive results are the filing-reading
+their major customers' returns) was null in 2018-2026 and in a retest on 2010-2017. The positive results are the filing-reading
 tools: a local model that answers numerical questions about real 10-Ks (95% given
 the right page, 78% finding the page itself) and a moat tagger that agrees with a
 blind human review 85% of the time. Turning these into point-in-time signals is
