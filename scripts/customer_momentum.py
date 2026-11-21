@@ -20,6 +20,13 @@ Commands::
 
     python scripts/customer_momentum.py prices   # monthly returns and the price-source check
     python scripts/customer_momentum.py run      # links, portfolios, docs/results/customer_momentum.md
+
+The early sample (pre-registered in ``docs/results/customer_momentum_2010_protocol.md``):
+10-Ks filed 2009-2017 (``download_early_10ks.py``), yfinance prices, decided by the
+Fama-MacBeth slope with the own-return control::
+
+    python scripts/customer_momentum.py prices-early
+    python scripts/customer_momentum.py run-early   # docs/results/customer_momentum_2010.md
 """
 
 from __future__ import annotations
@@ -68,6 +75,19 @@ RENAMED = {"ABC": "COR"}  # lake ticker -> the ticker the price files use
 SPLIT = pd.Timestamp("2023-12-31")  # 2018-2023 and 2024-2026 holding months, reported separately
 N_VARIANTS = 4
 
+# The early sample (docs/results/customer_momentum_2010_protocol.md): 10-Ks filed 2009-2017,
+# yfinance prices only, decided by the Fama-MacBeth slope.
+EARLY_YEARS = range(2009, 2018)
+EARLY_FIRST_SIGNAL = pd.Timestamp("2010-01-01")  # signal months January 2010 ...
+EARLY_LAST_SIGNAL = pd.Timestamp("2017-12-31")   # ... to December 2017; holding months to January 2018
+EARLY_YF_CACHE = cl.DATA / "prices_yf_early"
+EARLY_YF_START, EARLY_YF_END = "2009-10-01", "2018-03-01"
+EARLY_RETURNS = cl.DATA / "monthly_returns_early.parquet"
+EARLY_SOURCE = cl.DATA / "price_source_early.json"
+EARLY_OUT = ROOT / "docs" / "results" / "customer_momentum_2010.md"
+EARLY_OUT_CSV = ROOT / "docs" / "results" / "customer_momentum_2010.csv"
+EARLY_SPLIT = pd.Timestamp("2013-12-31")  # 2010-2013 and 2014-2017 (to January 2018) holding months
+
 
 # --------------------------------------------------------------------------- #
 # Prices
@@ -79,6 +99,14 @@ def month_ends() -> pd.DatetimeIndex:
     days = pd.DatetimeIndex(pd.to_datetime(spy["date"]))
     s = pd.Series(days, index=days)
     return pd.DatetimeIndex(s.groupby(days.to_period("M")).max().to_numpy())
+
+
+def sample_ends() -> pd.DatetimeIndex:
+    """The 2018-2026 month-ends: those the cached monthly returns were built on, once they exist.
+    sentiq's price files keep a rolling window (on 2026-11-18 SPY began 2018-11-19), so
+    re-reading SPY later would lose the early months."""
+    ends = pd.DatetimeIndex(pd.read_parquet(RETURNS).index) if RETURNS.exists() else month_ends()
+    return ends[(ends >= FIRST_SIGNAL) & (ends <= LAST_SIGNAL + pd.offsets.MonthEnd(1))]
 
 
 def _sentiq_tri(ticker: str) -> tuple[pd.Series, str] | None:
@@ -106,17 +134,17 @@ def _sentiq_tri(ticker: str) -> tuple[pd.Series, str] | None:
     return None
 
 
-def _yf_tri(ticker: str) -> pd.Series | None:
+def _yf_tri(ticker: str, cache: Path = YF_CACHE, start: str = "2017-11-01", end: str = "2026-11-15") -> pd.Series | None:
     """Daily adjusted close from yfinance (dividends and splits in the adjustment), cached."""
-    YF_CACHE.mkdir(parents=True, exist_ok=True)
-    p = YF_CACHE / f"{ticker}.parquet"
+    cache.mkdir(parents=True, exist_ok=True)
+    p = cache / f"{ticker}.parquet"
     if p.exists():
         s = pd.read_parquet(p)["close"]
     else:
         import yfinance as yf
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            df = yf.download(ticker, start="2017-11-01", end="2026-11-15", auto_adjust=True, progress=False)
+            df = yf.download(ticker, start=start, end=end, auto_adjust=True, progress=False)
         s = df["Close"].squeeze("columns").dropna() if len(df) else pd.Series(dtype=float)
         s = pd.Series(s.to_numpy(float), index=pd.DatetimeIndex(pd.to_datetime(s.index)), name="close")
         if s.index.tz is not None:
@@ -175,7 +203,7 @@ def build_returns(tickers: list[str], check: bool) -> pd.DataFrame:
 # Links
 # --------------------------------------------------------------------------- #
 
-def link_filings(require_all: bool = True) -> list[dict]:
+def link_filings(require_all: bool = True, years: range = YEARS) -> list[dict]:
     """Every 10-K of 2018-2026 with its customer weights: text links (share, "10% or more" as
     10) and XBRL-only pairs (the tagged share); the filer's own ticker never included. Without
     ``require_all``, a year not yet extracted is skipped (for fetching prices early)."""
@@ -185,9 +213,9 @@ def link_filings(require_all: bool = True) -> list[dict]:
     for r in sec.get("data", sec).values():
         current.setdefault(int(r["cik_str"]), r["ticker"])
     out = []
-    for y in YEARS:
+    for y in years:
         path = cl.run_path(y, MODEL, False)
-        if not path.exists() or (y == max(YEARS) and not (cl.DATA / f"report_{y}.md").exists()):
+        if not path.exists() or (y == max(years) and not (cl.DATA / f"report_{y}.md").exists()):
             if require_all:
                 raise SystemExit(f"no finished extraction for {y}: run customer_links.py extract, xbrl and report first")
             logger.info("%d: not extracted yet, skipped", y)
@@ -280,6 +308,18 @@ def portfolio(sig: pd.DataFrame, buckets: int) -> pd.DataFrame:
     return pd.DataFrame(out, columns=cols).set_index("hold")
 
 
+def residual_signal(sig: pd.DataFrame) -> pd.DataFrame:
+    """``sig`` with customer momentum replaced by its residual from a monthly cross-sectional
+    OLS on a constant and the supplier's own month-t return (the part the own return does not
+    explain); rows without an own return are dropped."""
+    out = []
+    for _, g in sig.dropna(subset=["cm", "own"]).groupby("month"):
+        X = np.column_stack([np.ones(len(g)), g["own"]])
+        beta = np.linalg.lstsq(X, g["cm"].to_numpy(), rcond=None)[0]
+        out.append(g.assign(cm=g["cm"].to_numpy() - X @ beta))
+    return pd.concat(out) if out else sig.iloc[:0]
+
+
 def stats(x: pd.Series, n_trials: int = N_VARIANTS) -> dict:
     x = x.dropna()
     t, p = newey_west_tstat(x, NW_LAG)
@@ -340,8 +380,7 @@ def _fmt(s: dict, pct: bool = True) -> str:
 
 def cmd_run(args) -> None:
     filings = link_filings()
-    ends = month_ends()
-    ends = ends[(ends >= FIRST_SIGNAL) & (ends <= LAST_SIGNAL + pd.offsets.MonthEnd(1))]
+    ends = sample_ends()
     tickers = _all_tickers(filings)
     check = json.loads(SOURCE_CHECK.read_text(encoding="utf-8")) if SOURCE_CHECK.exists() else {"source": {}, "compare": {}}
     if RETURNS.exists() and set(tickers) <= set(pd.read_parquet(RETURNS).columns) | {t for t, s in check["source"].items() if s == "none"}:
@@ -447,6 +486,185 @@ def cmd_run(args) -> None:
     logger.info("wrote %s and %s: %s (t = %.2f)", OUT, OUT_CSV, verdict, primary["t"])
 
 
+# --------------------------------------------------------------------------- #
+# The early sample, 2010-2017
+# --------------------------------------------------------------------------- #
+
+def early_month_ends() -> pd.DatetimeIndex:
+    """The last session of each month, from SPY's yfinance trading days."""
+    spy = _yf_tri("SPY", EARLY_YF_CACHE, EARLY_YF_START, EARLY_YF_END)
+    s = pd.Series(spy.index, index=spy.index)
+    return pd.DatetimeIndex(s.groupby(spy.index.to_period("M")).max().to_numpy())
+
+
+def early_returns(tickers: list[str]) -> pd.DataFrame:
+    """Monthly total returns from yfinance adjusted closes, December 2009 to January 2018."""
+    ends = early_month_ends()
+    ends = ends[(ends >= pd.Timestamp("2009-12-01")) & (ends <= pd.Timestamp("2018-01-31"))]
+    cols, source = {}, {}
+    for n, t in enumerate(sorted(set(tickers)), 1):
+        tri = _yf_tri(RENAMED.get(t, t), EARLY_YF_CACHE, EARLY_YF_START, EARLY_YF_END)
+        r = monthly(tri, ends) if tri is not None else None
+        if r is not None and r.notna().any():
+            cols[t], source[t] = r, "yfinance"
+        else:
+            source[t] = "none"
+        if n % 50 == 0:
+            logger.info("%d / %d tickers", n, len(set(tickers)))
+    EARLY_SOURCE.write_text(json.dumps(source, indent=1), encoding="utf-8")
+    return pd.DataFrame(cols)
+
+
+def cmd_prices_early(args) -> None:
+    rets = early_returns(_all_tickers(link_filings(require_all=False, years=EARLY_YEARS)))
+    rets.to_parquet(EARLY_RETURNS)
+    logger.info("wrote %s: %d tickers with prices", EARLY_RETURNS, rets.shape[1])
+
+
+def own_slopes(sig: pd.DataFrame) -> pd.Series:
+    """The own month-t return's coefficient in the primary Fama-MacBeth regression."""
+    b = {}
+    for m, g in sig.dropna(subset=["cm", "own", "fwd"]).groupby("hold"):
+        if len(g) >= MIN_SUPPLIERS:
+            X = np.column_stack([np.ones(len(g)), g["cm"], g["own"]])
+            b[m] = np.linalg.lstsq(X, g["fwd"].to_numpy(), rcond=None)[0][2]
+    return pd.Series(b, dtype=float)
+
+
+def late_slopes() -> pd.Series:
+    """The 2018-2026 primary slopes (for the pooled figure, information only)."""
+    if not RETURNS.exists():
+        return pd.Series(dtype=float)
+    ends = sample_ends()
+    filings = link_filings(years=YEARS)
+    sig = signals(links_at(filings, ends), pd.read_parquet(RETURNS).reindex(ends), ends)
+    return fama_macbeth(sig)[0]
+
+
+def cmd_run_early(args) -> None:
+    filings = link_filings(years=EARLY_YEARS)
+    ends = early_month_ends()
+    ends = ends[(ends >= EARLY_FIRST_SIGNAL) & (ends <= EARLY_LAST_SIGNAL + pd.offsets.MonthEnd(1))]
+    tickers = _all_tickers(filings)
+    source = json.loads(EARLY_SOURCE.read_text(encoding="utf-8")) if EARLY_SOURCE.exists() else {}
+    if EARLY_RETURNS.exists() and set(tickers) <= set(source):
+        rets = pd.read_parquet(EARLY_RETURNS)
+    else:
+        rets = early_returns(tickers)
+        rets.to_parquet(EARLY_RETURNS)
+        source = json.loads(EARLY_SOURCE.read_text(encoding="utf-8"))
+    rets = rets.reindex(ends)
+    sig = signals(links_at(filings, ends), rets, ends)
+
+    fm, fm0 = fama_macbeth(sig)
+    own_b = own_slopes(sig)
+    port3, resid3 = portfolio(sig, 3), portfolio(residual_signal(sig), 3)
+    ic = rank_ic(sig)
+    primary = stats(fm)
+    verdict = "supported" if primary["mean"] > 0 and primary["t"] >= 2.0 else "not supported"
+    pooled = pd.concat([fm, late_slopes()]).sort_index()
+
+    # Counts
+    per_month = sig.groupby("month")
+    n_sup = per_month.size()
+    n_cus = per_month["customers"].apply(lambda c: len({x for v in c for x in v.split(",")}))
+    wmt = sig["customers"].str.split(",").apply(lambda c: "WMT" in c).mean()
+    linked = {f["price_ticker"] for f in filings if f["customers"]}
+    customers = {t for f in filings for t in f["customers"]}
+    no_price = sorted(t for t in linked | customers if source.get(t, "none") == "none")
+    index = json.loads((cl.EARLY / "index.json").read_text(encoding="utf-8"))
+    ex13 = sum(bool((index.get(f["accession"]) or {}).get("ex13")) for f in filings)
+    unmatched, per_year = Counter(), []
+    for y in EARLY_YEARS:
+        rows = json.loads((cl.DATA / f"customers_{y}.json").read_text(encoding="utf-8"))
+        unmatched.update(r["customer"] for r in rows if r["named"] and r["share_of"] != "other"
+                         and r["match"] is None and (r["percent"] or 0) >= cl.MIN_PERCENT)
+        fy = [f for f in filings if f["filed"][:4] == str(y)]
+        per_year.append((y, len(fy), sum(bool(f["customers"]) for f in fy), sum(len(f["customers"]) for f in fy)))
+
+    def row(name: str, s: dict, pct: bool) -> str:
+        m = f"{100 * s['mean']:+.2f}%" if pct else f"{s['mean']:+.3f}"
+        return f"| {name} | {m} | {s['t']:.2f} | {s['months']} | {s['hit']:.0%} |"
+
+    first, second = fm[fm.index <= EARLY_SPLIT], fm[fm.index > EARLY_SPLIT]
+    lines = [
+        "# Customer momentum regression in S&P 500 suppliers, 2010-2017",
+        "",
+        f"Generated {datetime.now():%Y-%m-%d %H:%M} by `scripts/customer_momentum.py run-early`, under the rules "
+        "pre-registered in [customer_momentum_2010_protocol.md](customer_momentum_2010_protocol.md). Deviations from "
+        "the protocol: none. The first run (2026-11-18 17:17) gave the same primary result; its pooled row, "
+        "information only, was wrong (191 months, +0.074) because the 2018-2026 month-ends were re-read from "
+        "sentiq's SPY file, which had been cut to a rolling window that morning. They now come from the cached "
+        "2018-2026 returns, which reproduce that test exactly.",
+        "",
+        f"**Result: {verdict}.** The monthly Fama-MacBeth slope of suppliers' next-month return on their customers' "
+        f"return, controlling for their own month-t return, averaged {primary['mean']:+.3f} (Newey-West t = "
+        f"{primary['t']:.2f}, {primary['months']} months); the decision rule needs a positive mean with t ≥ 2.0. "
+        "In 2018-2026, where it was found, it was +0.075 (t 2.40).",
+        "",
+        "## Data",
+        "",
+        f"* 10-Ks filed 2009-2017 by {len({f['cik'] for f in filings})} companies of sentiq's S&P 500 list (members "
+        f"from 2018 on): {len(filings)}; with a link: {sum(bool(f['customers']) for f in filings)} "
+        f"({sum(len(f['customers']) for f in filings)} supplier-customer links, text only). Filings with an "
+        f"Exhibit 13 (not read): {ex13}.",
+        f"* Suppliers with a link at some point: {len(linked)}; distinct customers: {len(customers)}. Without yfinance "
+        f"prices (left out): {', '.join(no_price) or 'none'}.",
+        "* Most common customer names with 10% or more that match no current listed company: "
+        + ", ".join(f"{n} ({c})" for n, c in unmatched.most_common(15)) + ".",
+        f"* Suppliers in the regression each month: min {n_sup.min()}, median {int(n_sup.median())}, max "
+        f"{n_sup.max()}; distinct customers behind them: median {int(n_cus.median())}. Supplier-months whose signal "
+        f"includes Walmart: {wmt:.0%}. Months skipped (fewer than {MIN_SUPPLIERS} suppliers): "
+        f"{int((n_sup < MIN_SUPPLIERS).sum())}.",
+        "",
+        "| Year filed | 10-Ks | With a link | Links |",
+        "| --- | ---: | ---: | ---: |",
+        *[f"| {y} | {n} | {k} | {n_links} |" for y, n, k, n_links in per_year],
+        "",
+        "## Primary test",
+        "",
+        "| Measure | Mean | NW t | Months | Months > 0 |",
+        "| --- | ---: | ---: | ---: | ---: |",
+        row("Fama-MacBeth slope on customer momentum, controlling for own month-t return (primary)", primary, False),
+        "",
+        "Only this row decides. The slope is the next-month return per unit of customer return (0.10 means a "
+        "supplier whose customers rose 10% earns 1 point more the next month).",
+        "",
+        "## Secondary measures",
+        "",
+        "| Measure | Mean | NW t | Months | Months > 0 |",
+        "| --- | ---: | ---: | ---: | ---: |",
+        row("Slope without the own-return control", stats(fm0), False),
+        row("Own month-t return slope (in the primary regression)", stats(own_b), False),
+        row("Terciles on customer momentum, net", stats(port3["net"]), True),
+        row("Terciles on customer momentum, gross", stats(port3["gross"]), True),
+        row("Terciles on the residual of customer momentum after own return, net", stats(resid3["net"]), True),
+        row("Terciles on the residual, gross", stats(resid3["gross"]), True),
+        row("Rank correlation of customer momentum with next month's return", stats(ic), False),
+        row("Primary slope, holding months 2010-02 to 2013-12", stats(first), False),
+        row("Primary slope, holding months 2014-01 to 2018-01", stats(second), False),
+        row("Primary slope pooled with 2018-2026 (information only)", stats(pooled), False),
+        "",
+        f"Mean monthly turnover: terciles {port3['turnover'].mean():.2f}, residual terciles "
+        f"{resid3['turnover'].mean():.2f} (costs {1e4 * COST:.0f} bps per unit).",
+        "",
+        "## By year (primary slope)",
+        "",
+        "| Year | Months | Mean slope | Suppliers (median) |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    n_hold = sig.groupby("hold").size()
+    for y, g in fm.groupby(fm.index.year):
+        lines.append(f"| {y} | {len(g)} | {g.mean():+.3f} | {int(n_hold.reindex(g.index).median())} |")
+    EARLY_OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    table = pd.DataFrame({"fm_slope": fm, "fm_slope_no_control": fm0, "own_slope": own_b, "rank_ic": ic})
+    table = table.join(port3[["n", "gross", "net"]].add_prefix("terciles_")).join(
+        resid3[["gross", "net"]].add_prefix("residual_"))
+    table.rename_axis("hold").to_csv(EARLY_OUT_CSV)
+    logger.info("wrote %s and %s: %s (slope %+.3f, t = %.2f)", EARLY_OUT, EARLY_OUT_CSV, verdict,
+                primary["mean"], primary["t"])
+
+
 def main() -> None:
     use_utf8_output()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -454,8 +672,10 @@ def main() -> None:
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("prices", help="monthly returns and the price-source check (no signal)")
     sub.add_parser("run", help="links, portfolios and the results")
+    sub.add_parser("prices-early", help="2010-2017 monthly returns from yfinance (no signal)")
+    sub.add_parser("run-early", help="the 2010-2017 regression test and its results")
     args = p.parse_args()
-    {"prices": cmd_prices, "run": cmd_run}[args.cmd](args)
+    {"prices": cmd_prices, "run": cmd_run, "prices-early": cmd_prices_early, "run-early": cmd_run_early}[args.cmd](args)
 
 
 if __name__ == "__main__":
