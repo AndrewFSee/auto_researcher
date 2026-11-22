@@ -108,6 +108,14 @@ class Paragraph(BaseModel):
     context_ids: list[str] = Field(default_factory=list)
 
 
+class Calculation(BaseModel):
+    id: str = Field(description="c1, c2, ...")
+    description: str = Field(description="what it is, e.g. 'buybacks plus dividends over free cash flow'")
+    expression: str = Field(description="formula over metric ids (m3), context ids (x1) and quoted filing numbers "
+                                        "(f6[\"21,155\"]), with + - * / ( ), abs, min, max and constants")
+    unit: Unit
+
+
 class Omission(BaseModel):
     claim_id: str
     reason: str
@@ -117,18 +125,20 @@ class DraftMemo(BaseModel):
     title: str
     paragraphs: list[Paragraph]
     omitted_claims: list[Omission] = Field(default_factory=list, description="claims left out, each with a reason")
+    calculations: list[Calculation] = Field(default_factory=list, description="derived numbers, computed by code")
 
     def omitted(self) -> dict[str, str]:
         return {o.claim_id: o.reason for o in self.omitted_claims}
 
 
 FlagCode = Literal["quote_not_found", "uncited_claim", "number_mismatch", "after_as_of", "stale_input",
-                   "missing_input", "bear_case_dropped", "skill_not_stated", "possible_injection", "llm_lookahead"]
+                   "missing_input", "bear_case_dropped", "skill_not_stated", "possible_injection", "llm_lookahead",
+                   "calculation_error"]
 
 BLOCKING: dict[str, bool] = {
     "quote_not_found": False, "uncited_claim": True, "number_mismatch": True, "after_as_of": True,
     "stale_input": False, "missing_input": False, "bear_case_dropped": True, "skill_not_stated": True,
-    "possible_injection": True, "llm_lookahead": False,
+    "possible_injection": True, "llm_lookahead": False, "calculation_error": True,
 }
 
 

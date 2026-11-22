@@ -70,7 +70,8 @@ def _view(c: Claim, state: WorkflowState) -> ClaimView:
 
 def build_packet(state: WorkflowState, claims: dict[str, Claim], dropped: dict[str, str]) -> ReviewPacket:
     memo = state.need_memo()
-    m_by_id, c_by_id = {m.id: m for m in state.metrics}, {c.id: c for c in state.context}
+    m_by_id = {m.id: m for m in [*state.metrics, *state.calculations]}
+    c_by_id = {c.id: c for c in state.context}
     flags = list(state.flags)
     paragraphs = []
     for i, p in enumerate(memo.paragraphs, 1):

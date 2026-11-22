@@ -1,0 +1,295 @@
+<title>Memo Review Desk</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>
+/* Layout: a sticky progress bar, a memo index on the left, the memo with its evidence and red-pen marks on the right. */
+:root {
+  --bg: #f5f6f8; --panel: #ffffff; --ink: #1b2230; --muted: #5d6677; --line: #dde1e8; --soft: #eef1f5;
+  --accent: #2f4fb3; --accent-ink: #ffffff;
+  --right: #1f7a4d; --right-bg: #e4f3eb; --over: #9a6200; --over-bg: #fbf0dc; --wrong: #b42335; --wrong-bg: #fbe5e8;
+  --unsure: #5d6677; --unsure-bg: #eceef2; --block: #b42335;
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #12151c; --panel: #1a1f29; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2c3340; --soft: #222835;
+  --accent: #8aa4ff; --accent-ink: #10131a;
+  --right: #6fd19c; --right-bg: #173426; --over: #f0bf5c; --over-bg: #3a2e15; --wrong: #ff8a97; --wrong-bg: #3d1c22;
+  --unsure: #9aa3b2; --unsure-bg: #262c38; --block: #ff8a97; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #12151c; --panel: #1a1f29; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2c3340; --soft: #222835;
+  --accent: #8aa4ff; --accent-ink: #10131a;
+  --right: #6fd19c; --right-bg: #173426; --over: #f0bf5c; --over-bg: #3a2e15; --wrong: #ff8a97; --wrong-bg: #3d1c22;
+  --unsure: #9aa3b2; --unsure-bg: #262c38; --block: #ff8a97; color-scheme: dark }
+* { box-sizing: border-box }
+body { background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 14px; line-height: 1.5 }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--panel) }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)) }
+header.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line) }
+header.bar .wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; padding-block: 10px }
+h1 { font-size: 16px; font-weight: 600; margin: 0; letter-spacing: .01em }
+.meta { color: var(--muted); font-size: 13px }
+.progress { flex: 1 1 220px; display: flex; align-items: center; gap: 10px; min-width: 0 }
+.track { flex: 1; height: 6px; background: var(--soft); border-radius: 3px; overflow: hidden }
+.track > div { height: 100%; background: var(--accent); width: 0 }
+.status { font-size: 12px; color: var(--muted); white-space: nowrap }
+.layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 24px; padding-block: 20px; max-width: 1180px; margin: 0 auto }
+nav.index { display: flex; flex-direction: column; gap: 4px; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 64px); align-self: start }
+nav.index button { all: unset; cursor: pointer; display: grid; grid-template-columns: 56px 1fr; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 6px }
+nav.index button:hover { background: var(--soft) }
+nav.index button[aria-current="true"] { background: var(--panel); box-shadow: inset 3px 0 0 var(--accent) }
+nav.index button:focus-visible, .chip:focus-visible, .verdicts button:focus-visible, details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px }
+.tk { font-family: var(--mono); font-weight: 500 }
+.mini { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums }
+main { min-width: 0; display: flex; flex-direction: column; gap: 16px }
+.memohead { display: flex; flex-direction: column; gap: 6px }
+.memohead h2 { font-family: var(--serif); font-size: 22px; font-weight: 600; margin: 0; text-wrap: balance; line-height: 1.25 }
+.flags { display: flex; flex-wrap: wrap; gap: 6px }
+.flag { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--soft); color: var(--muted); font-family: var(--mono) }
+.flag.blocking { background: var(--wrong-bg); color: var(--block) }
+section.sec > h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 12px 0 6px; font-weight: 600 }
+article.para { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px }
+article.para.limitations { background: transparent; border-style: dashed }
+article.para[data-v="right"] { border-left: 4px solid var(--right) }
+article.para[data-v="over"] { border-left: 4px solid var(--over) }
+article.para[data-v="wrong"] { border-left: 4px solid var(--wrong) }
+article.para[data-v="unsure"] { border-left: 4px solid var(--unsure) }
+.ptext { font-family: var(--serif); font-size: 16px; line-height: 1.6; max-width: 68ch; white-space: pre-line }
+.ref { font-family: var(--mono); font-size: 11px; color: var(--muted) }
+details summary { cursor: pointer; color: var(--accent); font-size: 13px; list-style: none }
+details summary::-webkit-details-marker { display: none }
+details summary::before { content: "▸ "; }
+details[open] summary::before { content: "▾ "; }
+.ev { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; font-size: 13px }
+.ev .claim { border-left: 2px solid var(--line); padding-left: 10px }
+.ev .claim.bear { border-left-color: var(--over) }
+.ev blockquote { margin: 4px 0 0; font-family: var(--serif); font-size: 14px; color: var(--ink) }
+.ev .src { font-family: var(--mono); font-size: 11px; color: var(--muted) }
+.num { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; font-variant-numeric: tabular-nums }
+.num .v { font-family: var(--mono); text-align: right }
+.num .d { grid-column: 1 / -1; font-size: 11px; color: var(--muted); font-family: var(--mono); overflow-wrap: anywhere }
+.verdicts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+.verdicts button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer }
+.verdicts button[aria-pressed="true"][data-v="right"] { background: var(--right-bg); border-color: var(--right); color: var(--right) }
+.verdicts button[aria-pressed="true"][data-v="over"] { background: var(--over-bg); border-color: var(--over); color: var(--over) }
+.verdicts button[aria-pressed="true"][data-v="wrong"] { background: var(--wrong-bg); border-color: var(--wrong); color: var(--wrong) }
+.verdicts button[aria-pressed="true"][data-v="unsure"] { background: var(--unsure-bg); border-color: var(--unsure); color: var(--unsure) }
+.verdicts button:disabled { cursor: default; opacity: .7 }
+textarea { width: 100%; min-height: 38px; font: inherit; font-size: 13px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); resize: vertical }
+.overall { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 10px }
+.overall h3 { margin: 0; font-size: 14px }
+.lists { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)) }
+.lists ul { margin: 4px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px }
+.note { font-size: 12px; color: var(--muted) }
+.banner { font-size: 13px; padding: 8px 12px; border-radius: 6px; background: var(--soft); color: var(--muted) }
+@media (max-width: 760px) {
+  .layout { grid-template-columns: minmax(0, 1fr) }
+  nav.index { position: static; flex-direction: row; overflow-x: auto; padding-bottom: 4px }
+  nav.index button { grid-template-columns: auto; padding: 6px 10px; flex: 0 0 auto }
+  nav.index .mini { display: none }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important } }
+</style>
+
+<header class="bar"><div class="wrap">
+  <h1>Memo Review Desk</h1>
+  <span class="meta" id="pilotMeta"></span>
+  <div class="progress"><div class="track"><div id="bar"></div></div><span class="status" id="progress"></span></div>
+  <span class="status" id="saveState">Connecting to the review store…</span>
+</div></header>
+
+<div class="wrap"><div class="layout">
+  <nav class="index" id="index" aria-label="Memos"></nav>
+  <main id="memo"></main>
+</div></div>
+
+<script type="application/json" id="data">/*DATA*/</script>
+<script>
+(() => {
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const memos = DATA.memos;
+  const VERDICTS = [["right", "Right"], ["over", "Overstated"], ["wrong", "Wrong"], ["unsure", "Unsure"]];
+  const OVERALL = [["useful", "Useful as is"], ["edits", "Useful with edits"], ["not", "Not useful"]];
+  const marks = {};            // run id -> {paragraphs: {ref: {verdict, note}}, overall, note}
+  let db = null, canWrite = false, current = null;
+  const queues = {};           // one write at a time per document
+  const pending = {};          // run id -> writes in flight or typing not yet saved
+
+  const $ = (sel, el = document) => el.querySelector(sel);
+  const h = (tag, attrs = {}, ...kids) => {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") el.className = v; else if (k === "text") el.textContent = v;
+      else if (k.startsWith("on")) el.addEventListener(k.slice(2), v); else if (v !== null && v !== undefined) el.setAttribute(k, v);
+    }
+    for (const kid of kids.flat()) if (kid !== null && kid !== undefined) el.append(kid);
+    return el;
+  };
+
+  function fmt(value, unit) {
+    if (value === null || value === undefined) return "n/a";
+    if (typeof value === "string") return value;
+    const a = Math.abs(value);
+    if (unit === "pct" || unit === "ratio") return (unit === "ratio" && a > 5 ? value.toFixed(2) : (value * 100).toFixed(1) + "%");
+    if (unit === "x") return value.toFixed(2) + "x";
+    if (unit === "usd") {
+      if (a >= 1e12) return "$" + (value / 1e12).toFixed(2) + "T";
+      if (a >= 1e9) return "$" + (value / 1e9).toFixed(2) + "B";
+      if (a >= 1e6) return "$" + (value / 1e6).toFixed(1) + "M";
+      return "$" + value.toLocaleString();
+    }
+    return a >= 1000 ? value.toLocaleString() : String(+value.toPrecision(4));
+  }
+
+  const docId = run => run.replace(/[^A-Za-z0-9_.~:@+-]/g, "_");
+  const markOf = run => (marks[run] ||= {paragraphs: {}, overall: null, note: ""});
+  const reviewable = m => m.paragraphs.filter(p => p.kind !== "limitations");
+  const done = m => reviewable(m).filter(p => markOf(m.run).paragraphs[p.ref]?.verdict).length;
+
+  function save(m) {
+    if (!db || !canWrite) return;
+    const body = {ticker: m.ticker, run: m.run, as_of: DATA.as_of, ...markOf(m.run), updated: new Date().toISOString()};
+    const ref = db.doc("reviews/" + docId(m.run));
+    const run = () => ref.set(JSON.parse(JSON.stringify(body)));
+    $("#saveState").textContent = "Saving…";
+    pending[m.run] = (pending[m.run] || 0) + 1;
+    queues[m.run] = (queues[m.run] || Promise.resolve()).then(run).then(
+      () => { $("#saveState").textContent = "Saved"; },
+      e => { $("#saveState").textContent = e && e.code === "invalid_argument"
+        ? "This view can't save marks (read-only)" : "Not saved: " + (e && e.message || "the store did not answer"); })
+      .finally(() => { pending[m.run] -= 1; });
+  }
+  const noteTimers = {};
+  function saveSoon(m) {
+    clearTimeout(noteTimers[m.run]);
+    noteTimers[m.run] = setTimeout(() => { delete noteTimers[m.run]; save(m); }, 700);
+  }
+
+  function renderIndex() {
+    const nav = $("#index"); nav.replaceChildren();
+    for (const m of memos) {
+      const n = reviewable(m).length, k = done(m), ov = markOf(m.run).overall;
+      const label = OVERALL.find(o => o[0] === ov);
+      nav.append(h("button", {"aria-current": String(current === m), onclick: () => { location.hash = m.ticker; }},
+        h("span", {class: "tk", text: m.ticker}),
+        h("span", {class: "mini", text: `${k}/${n} marked${label ? " · " + label[1].toLowerCase() : ""}`})));
+    }
+    const all = memos.reduce((s, m) => s + reviewable(m).length, 0), got = memos.reduce((s, m) => s + done(m), 0);
+    $("#bar").style.width = (all ? 100 * got / all : 0) + "%";
+    $("#progress").textContent = `${got} of ${all} paragraphs marked · ${memos.filter(m => markOf(m.run).overall).length} of ${memos.length} memos rated`;
+  }
+
+  function evidence(p) {
+    const parts = [];
+    for (const c of p.claims) parts.push(h("div", {class: "claim" + (c.role === "bear" ? " bear" : "")},
+      h("div", {class: "src", text: `${c.id} · ${c.role === "bear" ? "bear case" : "filing analyst"} · claim: ${c.text}`}),
+      c.quotes.map(q => h("div", {}, h("blockquote", {text: "“" + q.quote + "”"}),
+        h("div", {class: "src", text: `${q.form} filed ${q.filed}${q.section ? " · " + q.section : ""} · ${q.doc_id}`})))));
+    for (const m of p.metrics) parts.push(h("div", {class: "num"},
+      h("span", {text: `${m.id} · ${m.name}`}), h("span", {class: "v", text: fmt(m.value, m.unit)}),
+      h("span", {class: "d", text: `${m.source} · data ${m.as_of}${m.available_date ? " · public " + m.available_date : ""}`})));
+    for (const x of p.context) parts.push(h("div", {class: "num"},
+      h("span", {text: `${x.id} · ${x.name}`}), h("span", {class: "v", text: fmt(x.value, x.unit)}),
+      h("span", {class: "d", text: `${x.source} · ${x.as_of} · ${x.track_record || "no measured track record"}`})));
+    if (!parts.length) return null;
+    const d = h("details", {}, h("summary", {text: `Evidence: ${p.claims.length} claims, ${p.metrics.length} numbers, ${p.context.length} context`}),
+      h("div", {class: "ev"}, parts));
+    return d;
+  }
+
+  function paragraph(m, p) {
+    const mk = markOf(m.run).paragraphs[p.ref] || {};
+    const art = h("article", {class: "para" + (p.kind === "limitations" ? " limitations" : ""), "data-v": mk.verdict || ""});
+    art.append(h("div", {class: "ref", text: `${p.ref}${p.kind === "limitations" ? " · what is missing" : ""}${p.flags.length ? " · " + p.flags.map(f => f.code).join(", ") : ""}`}),
+      h("div", {class: "ptext", text: p.text}));
+    const ev = evidence(p); if (ev) art.append(ev);
+    if (p.kind !== "limitations") {
+      const row = h("div", {class: "verdicts", role: "group", "aria-label": "Your verdict on " + p.ref});
+      for (const [v, label] of VERDICTS) row.append(h("button", {type: "button", "data-v": v, "aria-pressed": String(mk.verdict === v),
+        disabled: canWrite ? null : "", onclick: () => {
+          const pm = markOf(m.run).paragraphs; const cur = pm[p.ref] || {};
+          pm[p.ref] = {...cur, verdict: cur.verdict === v ? null : v};
+          art.dataset.v = pm[p.ref].verdict || "";
+          row.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === pm[p.ref].verdict)));
+          renderIndex(); save(m);
+        }}, label));
+      const ta = h("textarea", {id: `note-${docId(m.run)}-${p.ref}`, placeholder: "What is wrong or missing (optional)", "aria-label": "Note on " + p.ref,
+        disabled: canWrite ? null : "", oninput: e => {
+          const pm = markOf(m.run).paragraphs; pm[p.ref] = {...(pm[p.ref] || {}), note: e.target.value}; saveSoon(m); }});
+      ta.value = mk.note || "";
+      art.append(row, ta);
+    }
+    return art;
+  }
+
+  function renderMemo() {
+    const m = current, main = $("#memo"); main.replaceChildren();
+    if (!m) return;
+    const blocking = m.flags.filter(f => f.blocking);
+    main.append(h("div", {class: "memohead"},
+      h("div", {class: "meta", text: `${m.ticker} · as of ${DATA.as_of} · run ${m.run} · ${m.drafts} draft${m.drafts === 1 ? "" : "s"} · $${m.cost.toFixed(2)} at batch prices`}),
+      h("h2", {text: m.title}),
+      m.flags.length ? h("div", {class: "flags"}, m.flags.map(f => h("span", {class: "flag" + (f.blocking ? " blocking" : ""), title: f.message, text: f.code + (f.ref ? " " + f.ref : "")})))
+        : h("div", {class: "note", text: "No flags."}),
+      blocking.length ? h("div", {class: "banner", text: `${blocking.length} blocking flag${blocking.length === 1 ? "" : "s"}: this memo could not be approved as is.`}) : null));
+    let sec = null, box = null;
+    for (const p of m.paragraphs) {
+      if (p.section !== sec) { sec = p.section; box = h("section", {class: "sec"}, h("h3", {text: sec})); main.append(box); }
+      box.append(paragraph(m, p));
+    }
+    const mk = markOf(m.run);
+    const ov = h("div", {class: "verdicts", role: "group", "aria-label": "Overall verdict"});
+    for (const [v, label] of OVERALL) ov.append(h("button", {type: "button", "data-v": v === "useful" ? "right" : v === "edits" ? "over" : "wrong",
+      "aria-pressed": String(mk.overall === v), disabled: canWrite ? null : "", onclick: () => {
+        mk.overall = mk.overall === v ? null : v; renderMemo(); renderIndex(); save(m); }}, label));
+    const note = h("textarea", {id: `overall-${docId(m.run)}`, placeholder: "Overall: what would make this memo useful?", "aria-label": "Overall note",
+      disabled: canWrite ? null : "", oninput: e => { mk.note = e.target.value; saveSoon(m); }});
+    note.value = mk.note || "";
+    main.append(h("div", {class: "overall"}, h("h3", {text: "The memo as a whole"}), ov, note));
+    const lists = [];
+    if (Object.keys(m.omitted).length) lists.push(h("div", {}, h("strong", {text: "Claims left out by the drafter"}),
+      h("ul", {}, Object.entries(m.omitted).map(([k, v]) => h("li", {text: `${k}: ${v}`})))));
+    if (Object.keys(m.dropped).length) lists.push(h("div", {}, h("strong", {text: "Claims dropped by the quote check"}),
+      h("ul", {}, Object.entries(m.dropped).map(([k, v]) => h("li", {text: `${k}: ${v}`})))));
+    if (m.gaps.length) lists.push(h("div", {}, h("strong", {text: "Not answered by the filings"}), h("ul", {}, m.gaps.map(g => h("li", {text: g})))));
+    if (lists.length) main.append(h("div", {class: "lists"}, lists));
+  }
+
+  function route() {
+    const t = location.hash.slice(1);
+    current = memos.find(m => m.ticker === t) || memos[0];
+    renderIndex(); renderMemo(); window.scrollTo(0, 0);
+  }
+  window.addEventListener("hashchange", route);
+  $("#pilotMeta").textContent = `${memos.length} memos · as of ${DATA.as_of} · these memos cost $${DATA.cost.toFixed(2)}`
+    + (DATA.spent ? ` · $${DATA.spent.toFixed(2)} spent across the pilot's runs` : "");
+  route();
+
+  (async () => {
+    const timer = setTimeout(() => { $("#saveState").textContent = "The review store isn't answering yet; marks won't be saved."; }, 10000);
+    try {
+      const [d, u] = await Promise.all([window.claude?.use?.("db") ?? null, window.claude?.use?.("user") ?? null]);
+      db = d;
+      if (!db) { clearTimeout(timer); $("#saveState").textContent = "Read-only: marks can't be saved in this view."; return; }
+      canWrite = u ? (u.isOwner() || (await u.can("data.write")) === true) : true;
+      db.collection("reviews").onSnapshot(snap => {
+        clearTimeout(timer);
+        for (const doc of snap.docs) {
+          const body = doc.data(); if (!body || !body.run) continue;
+          if (pending[body.run] > 0 || noteTimers[body.run]) continue;  // this view's own edits are newer
+          marks[body.run] = {paragraphs: {...(body.paragraphs || {})}, overall: body.overall || null, note: body.note || ""};
+        }
+        if (!snap.metadata.fromCache) $("#saveState").textContent = canWrite ? "Marks save as you go" : "Read-only view";
+        const active = document.activeElement;
+        if (!(active && active.tagName === "TEXTAREA")) renderMemo();
+        renderIndex();
+      }, e => { clearTimeout(timer); $("#saveState").textContent = "The review store stopped answering (" + e.code + ")."; });
+      renderMemo();
+    } catch (e) {
+      clearTimeout(timer); $("#saveState").textContent = "Read-only: marks can't be saved in this view.";
+    }
+  })();
+})();
+</script>

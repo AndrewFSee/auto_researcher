@@ -21,6 +21,7 @@ WRITERS: dict[str, str] = {
     "bear_notes": "bear",
     "metrics": "data",
     "context": "context",
+    "calculations": "calculator",
 }
 DOCUMENT_WRITERS = {"filing", "bear"}
 
@@ -36,6 +37,7 @@ class WorkflowState:
         self.bear_notes: ResearchNotes | None = None
         self.metrics: list[Metric] = []
         self.context: list[ContextItem] = []
+        self.calculations: list[Metric] = []    # the latest draft's calculations, evaluated by code
         self.draft_memo: DraftMemo | None = None
         self.drafts: list[DraftMemo] = []          # every draft, superseded ones included
         self._flags: list[Flag] = []
@@ -102,4 +104,5 @@ class WorkflowState:
         return {"request": dump(self.request), "versions": self.versions, "plan": dump(self.plan),
                 "documents": dump(self.documents), "research_notes": dump(self.research_notes), "retrieval": self.retrieval,
                 "bear_notes": dump(self.bear_notes), "metrics": dump(self.metrics), "context": dump(self.context),
+                "calculations": dump(self.calculations),
                 "drafts": dump(self.drafts), "flags": dump(list(self._flags)), "audit": self.audit}

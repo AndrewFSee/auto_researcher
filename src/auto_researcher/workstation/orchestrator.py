@@ -10,10 +10,11 @@ from __future__ import annotations
 import hashlib
 
 from . import gates
+from .calc import run_calculations
 from .agents import BEAR_TASK, FILING_TASK, BearCaseAnalyst, ContextAnalyst, DataAnalyst, FilingAnalyst
 from .llm import LLM
 from .packet import ReviewPacket, build_packet
-from .schemas import SCHEMA_VERSION, DraftMemo, Plan, Request
+from .schemas import SCHEMA_VERSION, DraftMemo, Flag, Plan, Request
 from .state import WorkflowState
 from .tools.base import ContextTool, FilingTool, MetricTool
 
@@ -25,7 +26,11 @@ PLAN_TASK = (
 )
 DRAFT_TASK = (
     "Write the memo from the claims, metrics and context given, and nothing else. Every paragraph lists "
-    "the ids it rests on; every number must come from a cited metric, context item or claim. Use every "
+    "the ids it rests on. Every number in the prose must be a cited metric or context value, a number in a "
+    "cited claim's quotes, or a calculation: never compute a number yourself. For any derived figure (a sum, "
+    "difference, ratio, share, yield or growth rate) add a calculation with a formula over metric ids, "
+    "context ids and quoted numbers (claim f6's quoted 21,155 is f6[\"21,155\"]; a table in millions needs "
+    "* 1e6), and cite its id (c1, c2, ...) in metric_ids. Use every "
     "bear-case claim or list it in omitted_claims with a reason. When a paragraph uses a forecast, say "
     "what its track record is. Say plainly what is missing, in paragraphs of kind 'limitations', which cite "
     "nothing and state no figures; every other paragraph is 'analysis'. If feedback is given, fix exactly "
@@ -87,8 +92,12 @@ class Workstation:
                         "gaps": [*notes.gaps, *bear.gaps],
                         "feedback": feedback})
             state.write("orchestrator", "draft_memo", memo)
-            memo_flags = gates.check_memo(memo, request, claims, dropped, state.metrics, state.context,
-                                          stage=f"memo_draft_{attempt}", documents=state.documents)
+            calcs, errors = run_calculations(memo.calculations, state.metrics, state.context, claims, request.as_of)
+            state.write("calculator", "calculations", calcs)
+            memo_flags = [Flag(code="calculation_error", ref=cid, stage=f"memo_draft_{attempt}",
+                                     message=f"calculation {cid} failed: {err}") for cid, err in errors.items()]
+            memo_flags += gates.check_memo(memo, request, claims, dropped, [*state.metrics, *calcs], state.context,
+                                           stage=f"memo_draft_{attempt}", documents=state.documents)
             if not any(f.blocking for f in memo_flags) or attempt > self.max_redrafts:
                 break
             state.log("gate", "draft_failed", draft=attempt,

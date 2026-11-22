@@ -237,8 +237,8 @@ def check_memo(memo: DraftMemo, request: Request, claims: dict[str, Claim], drop
                 flags.append(Flag(code="skill_not_stated", ref=ref, stage=stage,
                                   message=f"paragraph {i + 1} uses {item.name}, a forecast with no measured track record"))
 
-        # Every number must come from a cited metric or context item, or from the text
-        # or quotes of a cited claim.
+        # Every number must come from a cited metric, calculation or context item, or from
+        # the verified quotes of a cited claim.
         values: list[tuple[float, Unit | None]] = []
         for mid in p.metric_ids:
             mv = m_by_id[mid].value if mid in m_by_id else None
@@ -248,8 +248,20 @@ def check_memo(memo: DraftMemo, request: Request, claims: dict[str, Claim], drop
             xv = c_by_id[xid].value if xid in c_by_id else None
             if isinstance(xv, (int, float)):
                 values.append((float(xv), c_by_id[xid].unit))
-        texts = [s for x in p.claim_ids if x in claims for s in [claims[x].text, *(e.quote for e in claims[x].evidence)]]
+        # Only quotes are checked against the filing; a claim's own wording is the model's.
+        texts = [e.quote for x in p.claim_ids if x in claims for e in claims[x].evidence]
         texts += [c_by_id[x].track_record or "" for x in p.context_ids if x in c_by_id]
+        # A cited calculation's inputs were verified by the calculator: its metrics' values
+        # and the quoted numbers it used count as sources too.
+        for mid in p.metric_ids:
+            calc = m_by_id.get(mid)
+            if calc is None or not calc.snapshot_id.startswith("calc:"):
+                continue
+            for used in filter(None, calc.snapshot_id[5:].split(";")):
+                if used in m_by_id and m_by_id[used].value is not None:
+                    values.append((m_by_id[used].value, m_by_id[used].unit))  # type: ignore[arg-type]
+                elif "[" in used and used.split("[", 1)[0] in claims:
+                    texts += [e.quote for e in claims[used.split("[", 1)[0]].evidence]
         sourced = [n for s in texts for n in numbers_in(s)]
         names = [*(m_by_id[x].name for x in p.metric_ids if x in m_by_id),
                  *(c_by_id[x].name for x in p.context_ids if x in c_by_id)]

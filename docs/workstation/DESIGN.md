@@ -31,7 +31,13 @@ state their own measured skill, and memos that can be scored later.
    paragraph lists the claim ids it rests on.
 4. **Numbers come from code.** A metric is computed by a tool from data, with a
    snapshot id. The LLM may choose which metrics to show; any number in the memo
-   must match a metric.
+   must be a cited metric or context value, a number in a cited claim's verified
+   quotes, or a calculation. A derived figure (a sum, ratio, share, yield) is a
+   calculation the draft declares as a formula over metric ids, context ids and
+   quoted numbers (`(f10["132.4"] - f10["91.3"]) * 1e9`); code evaluates it
+   (`calc.py`, a whitelist of arithmetic parsed with `ast`) and it is cited like a
+   metric, with its formula shown to the reviewer. A claim's own wording is the
+   model's and never counts as a source.
 5. **Tools carry their track record.** A tool whose output is a forecast or a signal
    declares its measured skill (from this repo's research log or the companion
    project's own walk-forward results). The memo must state it when it leans on one;
@@ -128,6 +134,7 @@ break detection on the stock's returns.
 | `skill_not_stated` | yes | a paragraph uses a forecast or signal that has no measured track record (the packet prints the record next to every paragraph that cites one) |
 | `possible_injection` | yes | retrieved text contains instruction-like content |
 | `llm_lookahead` | no | `as_of` is before the model's training cutoff (the model may know what happened) |
+| `calculation_error` | yes | a declared calculation does not evaluate (unknown id, a quoted number not in the claim, a form not allowed) |
 
 ## Storage
 

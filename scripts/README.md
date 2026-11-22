@@ -10,6 +10,7 @@ characters the default code page cannot encode.
 | Script | Purpose |
 | --- | --- |
 | `workstation.py` | A cited, gated memo on one company as of a date, for human review (`docs/workstation/DESIGN.md`): `memo TICKER --as-of DATE` (add `--dry-run` to see what the tools return without calling Claude), `runs` lists runs and decisions, `decide RUN_ID ACTION` records yours. Reads sentiq's EDGAR lake, TickerLake and market-compass's published data, all read-only |
+| `workstation_review.py` | Builds the review page for a pilot (`data/workstation/review/<pilot>.html`) from its saved runs: each memo with its quotes, numbers and calculations, and a verdict per paragraph and per memo; the published page stores the marks in its database (collection `reviews`) |
 
 ## Analyst pipeline
 
