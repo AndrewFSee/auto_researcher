@@ -100,6 +100,8 @@ class ContextItem(BaseModel):
 
 class Paragraph(BaseModel):
     section: str
+    kind: Literal["analysis", "limitations"] = Field(
+        default="analysis", description="'limitations': only says what is missing; cites nothing, states no figures")
     text: str
     claim_ids: list[str] = Field(default_factory=list)
     metric_ids: list[str] = Field(default_factory=list)

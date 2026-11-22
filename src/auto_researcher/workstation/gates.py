@@ -96,6 +96,20 @@ def check_coverage(plan: Plan, retrieval: dict[str, list[str]], metrics: list[Me
     return flags
 
 
+def check_text_vs_numbers(documents: list[Document], metrics: list[Metric], slack_days: int = 3) -> list[Flag]:
+    """Flag metrics computed from a filing newer than any filing text the analysts read (the
+    filing store can lag the facts): the memo would pair this quarter's numbers with last
+    quarter's words."""
+    latest_text = max((d.filed for d in documents), default=None)
+    newer = sorted({m.available_date for m in metrics if m.available_date is not None
+                    and (latest_text is None or (m.available_date - latest_text).days > slack_days)})
+    if not newer:
+        return []
+    return [Flag(code="missing_input", ref="filings", stage="inputs",
+                 message=f"metrics use a filing made {newer[-1]}, but the newest filing text available is "
+                         f"{latest_text or 'none'}: the latest report's text is missing")]
+
+
 def check_lookahead(as_of: date, training_cutoff: date | None) -> list[Flag]:
     if training_cutoff is not None and as_of < training_cutoff:
         return [Flag(code="llm_lookahead", stage="inputs",
@@ -107,11 +121,16 @@ def check_lookahead(as_of: date, training_cutoff: date | None) -> list[Flag]:
 # -- numbers -------------------------------------------------------------------------
 
 _NUM = re.compile(
-    r"(?<![\w.\-/])(-?)\$?(?>(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?)"
-    r"(?:\s*(%|percent\b|x\b|×|bn\b|billion\b|b\b|million\b|mn\b|m\b|thousand\b|k\b))?(?![\w\-/.]\w)",
+    r"(?<![\w.\-/–—])(-?)(\$?)(?>(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d+))?)"
+    r"(?:\s*(%|percent\b|x\b|×|tn\b|trillion\b|t\b|bn\b|billion\b|b\b|million\b|mn\b|m\b|thousand\b|k\b))?(?![\w\-/.–—]\w)",
     re.I,
 )
-_SCALE = {"bn": 1e9, "billion": 1e9, "b": 1e9, "million": 1e6, "mn": 1e6, "m": 1e6, "thousand": 1e3, "k": 1e3}
+# Written dates ("June 27, 2026", "Sept 30", "Aug. 31st"): their day numbers are not data.
+_DATE = re.compile(
+    r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?"
+    r"|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+\d{1,2}(?:st|nd|rd|th)?\b(?:,?\s+\d{4})?")
+_INT = re.compile(r"(?<![\d.,])\d{2,}(?!\d|[.,]\d)")
+_SCALE = {"tn": 1e12, "trillion": 1e12, "t": 1e12, "bn": 1e9, "billion": 1e9, "b": 1e9, "million": 1e6, "mn": 1e6, "m": 1e6, "thousand": 1e3, "k": 1e3}
 
 
 @dataclass(frozen=True)
@@ -120,20 +139,28 @@ class Number:
     value: float        # in natural units: 5.1% -> 0.051, $1.2 billion -> 1.2e9
     tol: float          # half a unit of the last digit shown, in the same units
     suffix: str
+    raw: float = 0.0    # as written, before the suffix's scale: "$15.5bn" -> 15.5
+    raw_tol: float = 0.0
+    plain: bool = False  # a bare integer: no $, decimals, thousands separator or suffix
 
 
 def numbers_in(text: str) -> list[Number]:
     """Numbers a reader would take as data. Skipped: years (1900-2100), plain integers
-    under 10 (counts, ordinals), and numbers inside identifiers (10-K, Q3, 2026-11-20)."""
+    under 10 (counts, ordinals), written dates ("June 27, 2026"), numbers inside
+    identifiers (10-K, Q3, 2026-11-20) and model codes with a capital X (777X)."""
     out = []
-    for m in _NUM.finditer(text):
-        sign, whole, frac, suffix = m.group(1), m.group(2), m.group(3) or "", (m.group(4) or "").lower()
+    for m in _NUM.finditer(_DATE.sub(" ", text)):
+        sign, dollar, whole, frac, suffix = m.group(1), m.group(2), m.group(3), m.group(4) or "", m.group(5) or ""
+        if suffix == "X":
+            continue
+        suffix = suffix.lower()
         n = float(whole.replace(",", "") + ("." + frac if frac else ""))
         if not suffix and not frac and "," not in whole and (n < 10 or 1900 <= n <= 2100):
             continue
         half = 0.5 * 10 ** -len(frac)
         scale = 0.01 if suffix in ("%", "percent") else _SCALE.get(suffix, 1.0)
-        out.append(Number(m.group(0).strip(), (-n if sign else n) * scale, half * scale, suffix))
+        out.append(Number(m.group(0).strip(), (-n if sign else n) * scale, half * scale, suffix, raw=n, raw_tol=half,
+                          plain=not (dollar or frac or suffix or "," in whole)))
     return out
 
 
@@ -148,7 +175,19 @@ def _candidates(value: float, unit: Unit | None) -> list[float]:
     return c
 
 
-def _matches(num: Number, values: list[tuple[float, Unit | None]]) -> bool:
+def _matches(num: Number, values: list[tuple[float, Unit | None]], sourced: list[Number] | None = None,
+             integers: set[int] | None = None) -> bool:
+    """Does ``num`` come from a cited value, from a number in cited text (also as written,
+    for tables that state their unit once: "15.5" read as "$15.5bn"), or, for a bare
+    integer, from the integers allowed (metric windows, numbers in the retrieved filings)?"""
+    if num.plain and integers and int(num.raw) in integers:
+        return True
+    for s in sourced or []:
+        if abs(abs(num.value) - abs(s.value)) <= num.tol + 1e-12 or abs(num.raw - s.raw) <= num.raw_tol + 1e-12:
+            return True
+        # Filing tables state their unit once ("in millions"): 21,155 may be written $21.2bn.
+        if not s.suffix and any(abs(abs(num.value) - abs(s.value) * k) <= num.tol + 1e-12 for k in (1e3, 1e6, 1e9)):
+            return True
     for v, unit in values:
         if not num.suffix:
             cands = _candidates(v, unit)
@@ -165,13 +204,17 @@ def _matches(num: Number, values: list[tuple[float, Unit | None]]) -> bool:
 # -- the memo --------------------------------------------------------------------------
 
 def check_memo(memo: DraftMemo, request: Request, claims: dict[str, Claim], dropped: dict[str, str],
-               metrics: list[Metric], context: list[ContextItem], stage: str = "memo") -> list[Flag]:
+               metrics: list[Metric], context: list[ContextItem], stage: str = "memo",
+               documents: dict[str, Document] | None = None) -> list[Flag]:
     flags: list[Flag] = []
     m_by_id, c_by_id = {m.id: m for m in metrics}, {c.id: c for c in context}
+    # Bare integers in the retrieved filings (model numbers, store counts) may be named
+    # without citing a claim; amounts with $, decimals, separators or units may not.
+    doc_ints = {int(x) for d in (documents or {}).values() for x in _INT.findall(d.text)}
     cited_claims: set[str] = set()
     for i, p in enumerate(memo.paragraphs):
         ref = f"p{i + 1}"
-        if not (p.claim_ids or p.metric_ids or p.context_ids):
+        if not (p.claim_ids or p.metric_ids or p.context_ids) and p.kind != "limitations":
             flags.append(Flag(code="uncited_claim", ref=ref, stage=stage, message=f"paragraph {i + 1} cites nothing"))
         for cid in p.claim_ids:
             cited_claims.add(cid)
@@ -207,11 +250,13 @@ def check_memo(memo: DraftMemo, request: Request, claims: dict[str, Claim], drop
                 values.append((float(xv), c_by_id[xid].unit))
         texts = [s for x in p.claim_ids if x in claims for s in [claims[x].text, *(e.quote for e in claims[x].evidence)]]
         texts += [c_by_id[x].track_record or "" for x in p.context_ids if x in c_by_id]
-        sourced = [n.value for s in texts for n in numbers_in(s)]
-        values += [(v, None) for v in sourced]
+        sourced = [n for s in texts for n in numbers_in(s)]
+        names = [*(m_by_id[x].name for x in p.metric_ids if x in m_by_id),
+                 *(c_by_id[x].name for x in p.context_ids if x in c_by_id)]
+        windows = {int(x) for name in names for x in re.findall(r"\d+", name)}
         text = p.text.replace(request.as_of.isoformat(), " ").replace(request.horizon, " ")
         for num in numbers_in(text):
-            if not _matches(num, values):
+            if not _matches(num, values, sourced, windows | doc_ints):
                 flags.append(Flag(code="number_mismatch", ref=ref, stage=stage,
                                   message=f"paragraph {i + 1}: {num.text!r} matches no cited metric or source"))
 

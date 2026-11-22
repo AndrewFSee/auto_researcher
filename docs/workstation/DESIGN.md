@@ -167,6 +167,17 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
    JSON schemas, cost per call) and `scripts/workstation.py`. Still to come: the research
    log as a tool, filings before 2018, 8-K earnings releases.
 3. **Pilot:** ten memos, your blind review, and a review page in the Streamlit app.
+   Batch mode (`batch.py`, `scripts/workstation.py batch`): each company's workflow runs
+   in its own thread; whenever all of them wait on Claude, their calls go out as one
+   Message Batch (half price). Replies are cached by request hash and batches in flight
+   are recorded, so an interrupted pilot reruns at no extra cost. First pilot, as of
+   2026-10-15 (the filing store's last date), 10 companies: $4.69, five batch rounds of
+   about two minutes. Its blocking flags were mostly the number check's own false alarms
+   (written dates, metric windows, model codes, trillions, figures from tables stated in
+   millions, "what is missing" paragraphs); those are fixed, and memo paragraphs now have
+   a kind (`analysis` or `limitations`; a limitations paragraph cites nothing and states
+   no figures). What the check still catches in first drafts is real: figures the model
+   computed itself, and figures cited without the claim or metric that holds them.
 4. **Extensions:** point-in-time scoring; peer comparison (several tickers); an MCP
    server exposing the tools so Claude Code and the desktop app can use them;
    study memos (option B: hypothesis, pre-registration, test) on the same skeleton.

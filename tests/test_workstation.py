@@ -194,6 +194,14 @@ def test_forecast_without_a_track_record_blocks():
     assert set(codes(packet)) == {"uncited_claim", "number_mismatch"}
 
 
+def test_numbers_newer_than_the_filing_text_are_flagged():
+    newer = [*METRICS[:2], METRICS[2].model_copy(update={"available_date": date(2026, 11, 3)})]
+    packet, *_ = run(metrics=newer)
+    flag = next(f for f in packet.flags if f.ref == "filings")
+    assert flag.code == "missing_input" and "2026-11-03" in flag.message and "2026-02-20" in flag.message
+    assert not packet.review_required
+
+
 def test_lookahead_flag_for_dates_before_the_training_cutoff():
     assert check_lookahead(AS_OF, date(2026, 6, 1)) == []
     packet, *_ = run(cutoff=date(2027, 1, 1))
@@ -219,3 +227,52 @@ def test_numbers_in_skips_identifiers_and_scales_units():
     got = {n.text: n.value for n in numbers_in("$1.2 billion, 5.1%, 2.4x, 1,234 and -3.0%")}
     assert got == {"$1.2 billion": 1.2e9, "5.1%": pytest.approx(0.051), "2.4x": 2.4, "1,234": 1234.0,
                    "-3.0%": pytest.approx(-0.03)}
+
+
+def _check(paragraphs, docs=(MDA, RISKS)):
+    from auto_researcher.workstation.gates import check_memo
+    from auto_researcher.workstation.schemas import Claim, DraftMemo
+    claims = {"f1": Claim(id="f1", text="Depreciation rose.", evidence=[
+        {"doc_id": MDA.doc_id, "quote": "Depreciation and depletion (includes impairments) 19.0 26.0 11.8 15.5"}])}
+    memo = DraftMemo.model_validate(draft(paragraphs))
+    req = Request(ticker="ACME", as_of=AS_OF, question="q")
+    vol = metric("m9", "volatility_63d", 0.344, "pct")
+    return sorted(f.code for f in check_memo(memo, req, claims, {}, [*METRICS, vol], [MACRO],
+                                             documents={d.doc_id: d for d in docs}))
+
+
+def test_number_check_skips_dates_windows_and_model_codes_but_not_amounts():
+    assert numbers_in("For the TTM to June 27, 2026 and as of Sept 30, the 777X and Aug. 31st") == []
+    assert numbers_in("a schedule for the 12–24 months after June") == []
+    ok = [para("Risks", "Depreciation rose to $15.5bn from $11.8bn (table in billions).", ["f1"]),
+          para("Risks", "Volatility over 63 trading days was 34.4%.", metrics=["m9"]),
+          para("Risks", "Results to June 30, 2026 are thin.", metrics=["m1"])]
+    assert _check(ok) == []
+    bad = [para("Risks", "Depreciation rose to $16.5bn.", ["f1"]),               # not in the table
+           para("Risks", "Volatility over 90 trading days was 34.4%.", metrics=["m9"]),  # wrong window
+           para("Risks", "Revenue was $512 million.", metrics=["m1"])]           # an amount needs a source
+    assert _check(bad) == ["number_mismatch"] * 3
+
+
+def test_bare_integers_from_the_filings_are_allowed_but_dollar_amounts_are_not():
+    plant = MDA.model_copy(update={"text": MDA.text + " The 787 program delivered planes."})
+    assert _check([para("Ops", "The 787 rate matters.", metrics=["m1"])], docs=(plant,)) == []
+    assert _check([para("Ops", "The 787 rate matters.", metrics=["m1"])], docs=(MDA,)) == ["number_mismatch"]
+    assert _check([para("Ops", "It spent $787 on it.", metrics=["m1"])], docs=(plant,)) == ["number_mismatch"]
+
+
+def test_limitations_paragraphs_may_cite_nothing_but_state_no_figures():
+    lim = {**para("Gaps", "Segment margins and lease obligations are not in the inputs."), "kind": "limitations"}
+    assert _check([lim]) == []
+    assert _check([para("Gaps", "Segment margins are not in the inputs.")]) == ["uncited_claim"]
+    fig = {**para("Gaps", "Leases of about $5bn are not in the inputs."), "kind": "limitations"}
+    assert _check([fig]) == ["number_mismatch"]
+
+
+def test_trillions_and_table_units_are_read():
+    got = {n.text: n.value for n in numbers_in("$4.99T and $1.2tn")}
+    assert got == {"$4.99T": pytest.approx(4.99e12), "$1.2tn": pytest.approx(1.2e12)}
+    from auto_researcher.workstation.gates import _matches
+    table = numbers_in("Net income 21,155 14,987")      # a filing table "in millions"
+    assert _matches(numbers_in("$21.2bn")[0], [], table)
+    assert not _matches(numbers_in("$22.2bn")[0], [], table)

@@ -27,7 +27,9 @@ DRAFT_TASK = (
     "Write the memo from the claims, metrics and context given, and nothing else. Every paragraph lists "
     "the ids it rests on; every number must come from a cited metric, context item or claim. Use every "
     "bear-case claim or list it in omitted_claims with a reason. When a paragraph uses a forecast, say "
-    "what its track record is. Say plainly what is missing. If feedback is given, fix exactly those problems."
+    "what its track record is. Say plainly what is missing, in paragraphs of kind 'limitations', which cite "
+    "nothing and state no figures; every other paragraph is 'analysis'. If feedback is given, fix exactly "
+    "those problems."
 )
 
 
@@ -70,6 +72,7 @@ class Workstation:
         state.add_flags("gate", fl_f + fl_b)
         state.add_flags("gate", gates.check_inputs(state.metrics, state.context, request.as_of))
         state.add_flags("gate", gates.check_coverage(plan, state.retrieval, state.metrics, state.context))
+        state.add_flags("gate", gates.check_text_vs_numbers(list(state.documents.values()), state.metrics))
         claims = {c.id: c for c in kept_f + kept_b}
         dropped = {**dropped_f, **dropped_b}
 
@@ -85,7 +88,7 @@ class Workstation:
                         "feedback": feedback})
             state.write("orchestrator", "draft_memo", memo)
             memo_flags = gates.check_memo(memo, request, claims, dropped, state.metrics, state.context,
-                                          stage=f"memo_draft_{attempt}")
+                                          stage=f"memo_draft_{attempt}", documents=state.documents)
             if not any(f.blocking for f in memo_flags) or attempt > self.max_redrafts:
                 break
             state.log("gate", "draft_failed", draft=attempt,

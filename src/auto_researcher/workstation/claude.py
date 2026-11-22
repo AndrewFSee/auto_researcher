@@ -87,6 +87,14 @@ def render_inputs(inputs: dict[str, Any]) -> str:
     return "\n\n".join(parts)
 
 
+def reply_of(msg: Any) -> dict[str, Any]:
+    """The parts of a Message the workstation keeps (also the batch cache's format)."""
+    return {"text": next((b.text for b in msg.content if b.type == "text"), None), "stop_reason": msg.stop_reason,
+            "model": msg.model, "request_id": getattr(msg, "_request_id", None),
+            "usage": {k: int(getattr(msg.usage, k, 0) or 0) for k in
+                      ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")}}
+
+
 def call_cost(model: str, usage: dict[str, int]) -> float | None:
     p = PRICES.get(model)
     if p is None:
@@ -120,17 +128,22 @@ class ClaudeLLM:
         params = self.params(role, task, inputs, schema)
         with self.client.messages.stream(**params) as stream:
             msg = stream.get_final_message()
-        usage = {k: int(getattr(msg.usage, k, 0) or 0) for k in
-                 ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens", "output_tokens")}
-        text = next((b.text for b in msg.content if b.type == "text"), None)
-        record = {"role": role, "model": params["model"], "served_by": msg.model, "stop_reason": msg.stop_reason,
-                  "usage": usage, "cost": call_cost(params["model"], usage),
-                  "request_id": getattr(msg, "_request_id", None)}
-        self.calls.append(record)
-        if msg.stop_reason != "end_turn" or text is None:
-            raise LLMError(f"{role}: stop_reason {msg.stop_reason}")
+        return self.finish(role, params, reply_of(msg), schema)
+
+    def finish(self, role: str, params: dict[str, Any], reply: dict[str, Any], schema: type[T],
+               cost_factor: float = 1.0) -> T:
+        """Record the call and parse its reply (a dict from ``reply_of``)."""
+        cost = call_cost(params["model"], reply["usage"]) if reply.get("usage") else None
+        self.calls.append({"role": role, "model": params["model"], "served_by": reply.get("model"),
+                           "stop_reason": reply.get("stop_reason"), "usage": reply.get("usage"),
+                           "cost": None if cost is None else cost * cost_factor, "request_id": reply.get("request_id"),
+                           **({"error": reply["error"]} if reply.get("error") else {})})
+        if reply.get("error"):
+            raise LLMError(f"{role}: {reply['error']}")
+        if reply.get("stop_reason") != "end_turn" or reply.get("text") is None:
+            raise LLMError(f"{role}: stop_reason {reply.get('stop_reason')}")
         try:
-            return schema.model_validate_json(text)
+            return schema.model_validate_json(reply["text"])
         except ValidationError as e:
             raise LLMError(f"{role}: reply does not match {schema.__name__}: {e}") from e
 

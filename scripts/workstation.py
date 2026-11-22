@@ -5,6 +5,7 @@ Research workstation: a cited, gated memo on one company as of a date, for human
     python scripts/workstation.py memo WMT --as-of 2026-11-20 --dry-run     # tools only, no API calls
     python scripts/workstation.py memo WMT --as-of 2026-11-20               # full run (Claude)
     python scripts/workstation.py memo WMT --question "Earnings quality and leverage"
+    python scripts/workstation.py batch AAPL JPM WMT --as-of 2026-11-20     # several memos, batch API (half price)
     python scripts/workstation.py runs                                      # list runs and decisions
     python scripts/workstation.py decide <run_id> approve_for_internal_use --notes "..."
 
@@ -60,15 +61,9 @@ def cmd_memo(args) -> None:
     if args.dry_run:
         dry_run(req)
         return
-    import anthropic
-    from dotenv import dotenv_values
-
     from auto_researcher.workstation.claude import ClaudeLLM
 
-    key = dotenv_values(args.env_file).get("ANTHROPIC_API_KEY")
-    if not key:
-        raise SystemExit(f"no ANTHROPIC_API_KEY in {args.env_file}")
-    llm = ClaudeLLM(anthropic.Anthropic(api_key=key, max_retries=4), effort=args.effort)
+    llm = ClaudeLLM(_client(args.env_file), effort=args.effort)
     ws = Workstation(llm, LakeFilings(), TickerLakeMetrics(), HubContext())
     try:
         packet, state = ws.run(req)
@@ -84,6 +79,59 @@ def cmd_memo(args) -> None:
         print(f"  {'BLOCKING ' if f.blocking else ''}{f.code} ({f.ref}): {f.message}")
     print(f"memo: {folder / 'memo.md'}")
     print(f"actions: {', '.join(packet.allowed_actions)}")
+
+
+def _client(env_file: Path):
+    import anthropic
+    from dotenv import dotenv_values
+
+    key = dotenv_values(env_file).get("ANTHROPIC_API_KEY")
+    if not key:
+        raise SystemExit(f"no ANTHROPIC_API_KEY in {env_file}")
+    return anthropic.Anthropic(api_key=key, max_retries=4)
+
+
+def cmd_batch(args) -> None:
+    """Several memos through the Message Batches API (half price; each stage is one batch
+    for all companies, so expect four or five batches of a few minutes to an hour each)."""
+    from auto_researcher.workstation.batch import Batcher, BatchLLM, ReplyCache
+
+    as_of = date.fromisoformat(args.as_of)
+    tickers = [t.upper() for t in args.tickers]
+    batcher = Batcher(_client(args.env_file), ReplyCache(), poll_seconds=args.poll)
+    filings, metrics, hub = LakeFilings(), TickerLakeMetrics(), HubContext()
+    llms = {t: BatchLLM(batcher, effort=args.effort) for t in tickers}
+
+    def job(t: str):
+        def run():
+            ws = Workstation(llms[t], filings, metrics, hub)
+            packet, state = ws.run(Request(ticker=t, as_of=as_of, question=args.question, horizon=args.horizon))
+            return packet, save_run(state, packet, root=args.runs)
+        return run
+
+    results = batcher.run([job(t) for t in tickers])
+    rows = []
+    for t, res in zip(tickers, results):
+        cost = llms[t].cost
+        if isinstance(res, Exception):
+            rows.append({"ticker": t, "error": str(res), "cost": cost})
+            print(f"{t:6s} FAILED ({res}) cost ${cost:.2f}")
+            continue
+        packet, folder = res
+        blocking = [f.code for f in packet.flags if f.blocking]
+        rows.append({"ticker": t, "run": folder.name, "paragraphs": len(packet.paragraphs), "flags": len(packet.flags),
+                     "blocking": blocking, "drafts": sum(1 for c in llms[t].calls if c["role"] == "orchestrator_draft"),
+                     "cost": cost})
+        print(f"{t:6s} {folder.name}  {len(packet.paragraphs):2d} paragraphs  {len(packet.flags)} flags "
+              f"({len(blocking)} blocking{': ' + ', '.join(blocking) if blocking else ''})  ${cost:.2f}")
+    total = sum(r["cost"] for r in rows)
+    print(f"total ${total:.2f} at batch prices over {len(batcher.batches)} batches: "
+          f"{[(b['requests'], b['seconds']) for b in batcher.batches]}")
+    out = Path(args.runs).parent / "pilots" / f"{as_of}_{len(tickers)}.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps({"as_of": as_of.isoformat(), "question": args.question, "memos": rows,
+                               "batches": batcher.batches, "cost": total}, indent=1), encoding="utf-8")
+    print(f"summary: {out}")
 
 
 def cmd_runs(args) -> None:
@@ -116,6 +164,15 @@ def main() -> None:
     m.add_argument("--env-file", type=Path, default=ENV_FILE)
     m.add_argument("--dry-run", action="store_true", help="show what the tools return; no API calls")
     m.set_defaults(fn=cmd_memo)
+    b = sub.add_parser("batch", help="several memos through the Message Batches API (half price, slower)")
+    b.add_argument("tickers", nargs="+")
+    b.add_argument("--as-of", default=date.today().isoformat())
+    b.add_argument("--question", default=DEFAULT_QUESTION)
+    b.add_argument("--horizon", default="12m")
+    b.add_argument("--effort", default="high", choices=["low", "medium", "high"])
+    b.add_argument("--poll", type=float, default=30.0, help="seconds between batch status checks")
+    b.add_argument("--env-file", type=Path, default=ENV_FILE)
+    b.set_defaults(fn=cmd_batch)
     sub.add_parser("runs").set_defaults(fn=cmd_runs)
     d = sub.add_parser("decide")
     d.add_argument("run_id")
