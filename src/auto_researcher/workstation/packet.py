@@ -84,7 +84,7 @@ def build_packet(state: WorkflowState, claims: dict[str, Claim], dropped: dict[s
     gaps = [g for notes in (state.research_notes, state.bear_notes) if notes is not None for g in notes.gaps]
     blocking = any(f.blocking for f in flags)
     return ReviewPacket(
-        request=state.request, title=memo.title, paragraphs=paragraphs, omitted_claims=memo.omitted_claims,
+        request=state.request, title=memo.title, paragraphs=paragraphs, omitted_claims=memo.omitted(),
         dropped_claims=dropped, gaps=gaps, flags=flags, review_required=blocking,
         allowed_actions=[a for a in ALL_ACTIONS if not (blocking and a == "approve_for_internal_use")],
         versions=state.versions)
@@ -117,6 +117,6 @@ def to_markdown(packet: ReviewPacket) -> str:
     if packet.dropped_claims:
         out += ["## Claims that failed verification", ""] + [f"- {k}: {v}" for k, v in packet.dropped_claims.items()] + [""]
     if packet.gaps:
-        out += ["## Not answered by the documents", ""] + [f"- {g}" for g in packet.gaps] + [""]
+        out += ["## Not answered by the filings", ""] + [f"- {g}" for g in packet.gaps] + [""]
     out += ["## Actions", "", ", ".join(packet.allowed_actions), ""]
     return "\n".join(out)

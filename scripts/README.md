@@ -5,6 +5,12 @@ you can install the package with `pip install -e .`. On Windows, set
 `PYTHONUTF8=1` if you redirect a script's output to a file; some scripts print
 characters the default code page cannot encode.
 
+## Research workstation
+
+| Script | Purpose |
+| --- | --- |
+| `workstation.py` | A cited, gated memo on one company as of a date, for human review (`docs/workstation/DESIGN.md`): `memo TICKER --as-of DATE` (add `--dry-run` to see what the tools return without calling Claude), `runs` lists runs and decisions, `decide RUN_ID ACTION` records yours. Reads sentiq's EDGAR lake, TickerLake and market-compass's published data, all read-only |
+
 ## Analyst pipeline
 
 | Script | Purpose |

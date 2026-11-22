@@ -37,6 +37,9 @@ class FixtureMetrics:
     def __init__(self, metrics: list[Metric]) -> None:
         self.by_name = {m.name: m for m in metrics}
 
+    def available(self) -> dict[str, str]:
+        return {n: n for n in self.by_name}
+
     def metrics(self, ticker: str, names: list[str], as_of: date) -> list[Metric]:
         return [self.by_name[n] for n in names if n in self.by_name]
 
@@ -46,6 +49,9 @@ class FixtureContext:
 
     def __init__(self, items: list[ContextItem]) -> None:
         self.by_name = {c.name: c for c in items}
+
+    def available(self) -> dict[str, str]:
+        return {n: n for n in self.by_name}
 
     def context(self, ticker: str, names: list[str], as_of: date) -> list[ContextItem]:
         return [self.by_name[n] for n in names if n in self.by_name]

@@ -18,8 +18,10 @@ from .state import WorkflowState
 from .tools.base import ContextTool, FilingTool, MetricTool
 
 PLAN_TASK = (
-    "Turn the request into a plan: memo sections, the questions each must answer from the company's "
-    "filings, the metrics to compute and the context tools to read."
+    "Turn the request into a plan: memo sections (short ids s1, s2, ...), the questions each must answer "
+    "from the company's 10-K and 10-Qs, the metrics to compute and the context items to read. Choose "
+    "metrics and context only from the catalogues given, by their exact names; pick what the request "
+    "needs, not everything."
 )
 DRAFT_TASK = (
     "Write the memo from the claims, metrics and context given, and nothing else. Every paragraph lists "
@@ -46,8 +48,14 @@ class Workstation:
         state.log("orchestrator", "request_received", request=request.model_dump(mode="json"))
         state.add_flags("gate", gates.check_lookahead(request.as_of, self.llm.training_cutoff))
 
+        # Offer only the context items that exist for this stock and date (vol covers 41
+        # names, augury 28; snapshots exist only near today).
+        offered = self.context_tool.available()
+        present = {c.name for c in self.context_tool.context(request.ticker, list(offered), request.as_of)}
         plan = self.llm.complete_json(role="orchestrator_plan", task=PLAN_TASK, schema=Plan,
-                                      inputs={"request": request.model_dump(mode="json")})
+                                      inputs={"request": request.model_dump(mode="json"),
+                                              "metric_catalogue": self.metrics_tool.available(),
+                                              "context_catalogue": {k: v for k, v in offered.items() if k in present}})
         state.write("orchestrator", "plan", plan)
 
         FilingAnalyst(self.llm, self.filings).run(state)
@@ -84,5 +92,8 @@ class Workstation:
                       flags=[f.model_dump(mode="json") for f in memo_flags])
             feedback = [f"{f.code} ({f.ref}): {f.message}" for f in memo_flags if f.blocking]
         state.add_flags("gate", memo_flags)
+        calls = getattr(self.llm, "calls", None)
+        if calls and isinstance(calls[0], dict) and "usage" in calls[0]:
+            state.log("orchestrator", "llm_usage", calls=calls, cost=round(sum(c["cost"] or 0 for c in calls), 4))
         state.log("orchestrator", "packet_built", drafts=len(state.drafts))
         return build_packet(state, claims, dropped), state

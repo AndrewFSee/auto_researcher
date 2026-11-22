@@ -1,7 +1,7 @@
 """Run storage: each run is written once, under data/workstation/runs/<run_id>/.
 
 ``state.json`` holds the whole workflow state, ``packet.json`` the review packet,
-``audit.jsonl`` the event log; ``decision.json`` is added when a human reviews it.
+``memo.md`` the packet as Markdown, ``audit.jsonl`` the event log; ``decision.json`` is added when a human reviews it.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .packet import ReviewPacket
+from .packet import ReviewPacket, to_markdown
 from .state import WorkflowState
 
 RUNS = Path(__file__).resolve().parents[3] / "data" / "workstation" / "runs"
@@ -28,6 +28,7 @@ def save_run(state: WorkflowState, packet: ReviewPacket, root: Path = RUNS) -> P
     folder.mkdir(parents=True, exist_ok=False)  # runs are never overwritten
     (folder / "state.json").write_text(json.dumps(state.to_dict(), indent=1, default=str), encoding="utf-8")
     (folder / "packet.json").write_text(packet.model_dump_json(indent=1), encoding="utf-8")
+    (folder / "memo.md").write_text(to_markdown(packet), encoding="utf-8")
     with open(folder / "audit.jsonl", "w", encoding="utf-8") as fh:
         for e in state.audit:
             fh.write(json.dumps(e, default=str) + "\n")

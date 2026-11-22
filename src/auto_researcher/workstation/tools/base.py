@@ -22,11 +22,15 @@ class FilingTool(Protocol):
 class MetricTool(Protocol):
     version: str
 
+    def available(self) -> dict[str, str]: ...
+
     def metrics(self, ticker: str, names: list[str], as_of: date) -> list[Metric]: ...
 
 
 class ContextTool(Protocol):
     version: str
+
+    def available(self) -> dict[str, str]: ...
 
     def context(self, ticker: str, names: list[str], as_of: date) -> list[ContextItem]: ...
 

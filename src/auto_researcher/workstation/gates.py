@@ -71,9 +71,11 @@ def check_inputs(metrics: list[Metric], context: list[ContextItem], as_of: date,
     flags = []
     for item, default in [(m, metric_days) for m in metrics] + [(c, context_days) for c in context]:
         limit = item.max_age_days if item.max_age_days is not None else default
-        if item.as_of > as_of:
+        public = getattr(item, "available_date", None)
+        if item.as_of > as_of or (public is not None and public > as_of):
             flags.append(Flag(code="after_as_of", ref=item.id, stage="inputs",
-                              message=f"{item.name} is dated {item.as_of}, after {as_of}"))
+                              message=f"{item.name} uses data dated {max(item.as_of, public or item.as_of)}, "
+                                      f"after {as_of}"))
         elif (as_of - item.as_of).days > limit:
             flags.append(Flag(code="stale_input", ref=item.id, stage="inputs",
                               message=f"{item.name} is from {item.as_of}, {(as_of - item.as_of).days} days old"))
@@ -215,7 +217,7 @@ def check_memo(memo: DraftMemo, request: Request, claims: dict[str, Claim], drop
 
     for cid, claim in claims.items():
         if claim.role == "bear" and cid not in cited_claims:
-            if not memo.omitted_claims.get(cid, "").strip():
+            if not memo.omitted().get(cid, "").strip():
                 flags.append(Flag(code="bear_case_dropped", ref=cid, stage=stage,
                                   message=f"bear-case claim {cid} is neither in the memo nor listed as omitted"))
     return flags

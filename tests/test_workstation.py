@@ -86,7 +86,8 @@ GOOD = [para("Earnings quality", "Operating cash flow was 84% of net income: $51
 
 
 def draft(paragraphs=GOOD, omitted=None):
-    return {"title": "ACME pre-investment memo", "paragraphs": paragraphs, "omitted_claims": omitted or {}}
+    return {"title": "ACME pre-investment memo", "paragraphs": paragraphs,
+            "omitted_claims": [{"claim_id": k, "reason": v} for k, v in (omitted or {}).items()]}
 
 
 def run(docs=(MDA, RISKS, LATE), metrics=METRICS, context=(MACRO, BANDS), filing=FILING, bear=BEAR,
@@ -119,7 +120,7 @@ def test_normal_memo_passes_with_evidence_and_audit(tmp_path):
     assert "walk-forward AUC 0.90" in md and "Cash provided by operating activities" in md
 
     folder = save_run(state, packet, root=tmp_path)
-    assert {p.name for p in folder.iterdir()} == {"state.json", "packet.json", "audit.jsonl"}
+    assert {p.name for p in folder.iterdir()} == {"state.json", "packet.json", "memo.md", "audit.jsonl"}
     with pytest.raises(FileExistsError):
         save_run(state, packet, root=tmp_path)
     record_decision(folder, "approve_for_internal_use")

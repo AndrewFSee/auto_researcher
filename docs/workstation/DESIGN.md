@@ -1,6 +1,6 @@
 # Research workstation: design
 
-Status: Phase 1 (mocked prototype). Written 2026-11-21.
+Status: Phase 2 (real read-only tools and the Claude client), not yet run live. Written 2026-11-21.
 
 The workstation answers a request like *"Prepare a memo on ACME as of 2026-11-20:
 earnings quality, leverage, downside risks"* with a **review packet**: a memo whose
@@ -157,9 +157,15 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
 1. **Mocked prototype** (this commit): schemas, state with write permissions, gates,
    fixture tools, a scripted LLM, the orchestrator, the review packet, run storage
    and the fixture suite. No network, no API calls.
-2. **Real read-only tools:** filings, fundamentals, prices, research log, hub data;
-   the Claude client (sentiq's key); a CLI `python scripts/workstation.py memo ACME
-   --as-of 2026-11-20`.
+2. **Real read-only tools:** filings (`tools/filings.py`: sentiq's lake, 2018+, latest
+   10-K and the 10-Qs after it, BM25 over located sections), fundamentals and prices
+   (`tools/market.py`: TickerLake company facts through `sec_fundamentals`' point-in-time
+   table, TickerLake OHLCV; 31 metrics), hub context (`tools/hub.py`: 18 items from
+   market-compass, histories as of the date, snapshots only near today, track records
+   from published scores or the project README with its source), the Claude client
+   (`claude.py`: Opus 5.5 plans and drafts, Sonnet 5.5 reads filings; streamed, strict
+   JSON schemas, cost per call) and `scripts/workstation.py`. Still to come: the research
+   log as a tool, filings before 2018, 8-K earnings releases.
 3. **Pilot:** ten memos, your blind review, and a review page in the Streamlit app.
 4. **Extensions:** point-in-time scoring; peer comparison (several tickers); an MCP
    server exposing the tools so Claude Code and the desktop app can use them;

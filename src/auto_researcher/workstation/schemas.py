@@ -77,7 +77,8 @@ class Metric(BaseModel):
     name: str
     value: float | None
     unit: Unit
-    as_of: date = Field(description="date of the data the value is computed from")
+    as_of: date = Field(description="date of the data the value is computed from (period end, last close)")
+    available_date: date | None = Field(default=None, description="when the inputs became public (filing date)")
     period: str | None = None
     source: str
     snapshot_id: str
@@ -105,10 +106,18 @@ class Paragraph(BaseModel):
     context_ids: list[str] = Field(default_factory=list)
 
 
+class Omission(BaseModel):
+    claim_id: str
+    reason: str
+
+
 class DraftMemo(BaseModel):
     title: str
     paragraphs: list[Paragraph]
-    omitted_claims: dict[str, str] = Field(default_factory=dict, description="claim id -> why it is left out")
+    omitted_claims: list[Omission] = Field(default_factory=list, description="claims left out, each with a reason")
+
+    def omitted(self) -> dict[str, str]:
+        return {o.claim_id: o.reason for o in self.omitted_claims}
 
 
 FlagCode = Literal["quote_not_found", "uncited_claim", "number_mismatch", "after_as_of", "stale_input",
