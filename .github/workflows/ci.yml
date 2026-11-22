@@ -80,6 +80,7 @@ jobs:
           src/auto_researcher/features/valuation.py
           src/auto_researcher/features/fundamental_factors.py
           src/auto_researcher/models/growth_forecast.py
+          src/auto_researcher/workstation
 
   build:
     name: Build package
