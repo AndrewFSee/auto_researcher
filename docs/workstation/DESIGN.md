@@ -185,6 +185,45 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
    a kind (`analysis` or `limitations`; a limitations paragraph cites nothing and states
    no figures). What the check still catches in first drafts is real: figures the model
    computed itself, and figures cited without the claim or metric that holds them.
+
+   **Your review of the ten final memos** (the review page, 2026-11-23): of 181
+   analysis paragraphs, 166 right, 15 overstated, none wrong; 3 memos useful as they
+   stand, 7 needing edits, none not useful. A note on a "right" mark means a borderline
+   right that could have been "overstated": 55 of them. No arithmetic error survived the
+   calculator. What remains is reasoning beyond the evidence:
+   * "benign backdrop" headlines resting on the macro and credit models the same
+     paragraph says have no 12-month skill, and a 2nd-percentile Baa spread read as
+     "tight credit" (nine of ten memos);
+   * "re-rating" or "already priced in" from a 12-month return, with no past multiple;
+   * figures from different dates or periods compared as if they were the same date
+     (year-end debt with June cash, a half-year item in a quarter's bridge);
+   * statements no quote supports (named probes, "no minimum commitment");
+   * a few reversed directions (a one-off gain said to inflate P/E);
+   * the volatility premium compared with 63-day realized vol, though it uses 21-day;
+   * a missing-filing-text flag left out of the "what is missing" paragraphs.
+
+   Two of these were gaps in what the drafter was given: it saw each metric and
+   context item only by its short name, and never saw the flags raised before drafting.
+   Fixes, none of which change the plan's or the analysts' inputs (so their cached
+   replies still serve a rerun):
+   * every metric and context item carries a `definition`: the catalogue line plus how
+     to read it (`READINGS` in `tools/hub.py` and `tools/market.py`), such as which
+     direction of the spread percentile means easy credit, the premium's 21-day window,
+     and the fact that the nowcast is not a forecast;
+   * when the plan asks for a margin or a valuation multiple, the data analyst also
+     gets its value from a year earlier (`<name>_1y_ago`, computed only from data
+     public then);
+   * each quote reaches the drafter with its document's form and filing date;
+   * `input_flags`: the pre-draft flags, which the "what is missing" paragraphs must
+     cover (metrics with no value are listed together);
+   * drafting rules: read values by their definitions; a model with no skill at the
+     horizon cannot carry a conclusion about it; mark inferences as inferences; a change
+     needs both values; say so when combining dates or periods; work out the direction
+     of a distortion from the formula.
+
+   Unsupported wording is still checked by no code. The next step is a verifier that
+   reads each paragraph against its cited quotes, measured first against your 181
+   marks.
 4. **Extensions:** point-in-time scoring; peer comparison (several tickers); an MCP
    server exposing the tools so Claude Code and the desktop app can use them;
    study memos (option B: hypothesis, pre-registration, test) on the same skeleton.

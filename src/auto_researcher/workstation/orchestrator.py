@@ -14,7 +14,7 @@ from .calc import run_calculations
 from .agents import BEAR_TASK, FILING_TASK, BearCaseAnalyst, ContextAnalyst, DataAnalyst, FilingAnalyst
 from .llm import LLM
 from .packet import ReviewPacket, build_packet
-from .schemas import SCHEMA_VERSION, DraftMemo, Flag, Plan, Request
+from .schemas import SCHEMA_VERSION, Claim, Document, DraftMemo, Flag, Plan, Request
 from .state import WorkflowState
 from .tools.base import ContextTool, FilingTool, MetricTool
 
@@ -33,13 +33,54 @@ DRAFT_TASK = (
     "* 1e6), and cite its id (c1, c2, ...) in metric_ids. Use every "
     "bear-case claim or list it in omitted_claims with a reason. When a paragraph uses a forecast, say "
     "what its track record is. Say plainly what is missing, in paragraphs of kind 'limitations', which cite "
-    "nothing and state no figures; every other paragraph is 'analysis'. If feedback is given, fix exactly "
-    "those problems."
+    "nothing and state no figures; every other paragraph is 'analysis'. "
+    "Read each metric and context item by its definition: a low spread percentile, for example, means credit "
+    "is cheap and easy, not tight. A forecast or score whose track record shows no skill at the memo's horizon "
+    "may be reported with that caveat, but no conclusion about the horizon may rest on it, in a paragraph's "
+    "opening sentence or anywhere else. State as fact only what a quote, metric or context item shows: mark "
+    "your own inferences as inferences, and do not name events, terms or causes that no quote mentions. A "
+    "claim that something changed (a re-rating, multiple expansion, slowing margins, 'already priced in') "
+    "needs values for both dates, such as the _1y_ago metrics; a price return alone does not show it. Compare "
+    "figures for the same date or period; when you must combine different ones (year-end debt with June cash, "
+    "one quarter with a half-year), say so in the sentence. Each quote shows the form and filing date of its "
+    "document: use the latest period the evidence covers. Work out which way a distortion moves a ratio from "
+    "its formula: a one-off gain raises earnings, so it lowers P/E. input_flags lists problems found before "
+    "drafting: the limitations paragraphs must cover each one. If feedback is given, fix exactly those "
+    "problems."
 )
+# Problems found before drafting that the memo must disclose (the pilot's limitations
+# paragraphs left out a missing-filing-text flag the drafter was never shown).
+INPUT_FLAGS = ("missing_input", "stale_input", "llm_lookahead")
 
 
 def prompt_version() -> str:
     return hashlib.sha256("\n".join([PLAN_TASK, DRAFT_TASK, FILING_TASK, BEAR_TASK]).encode()).hexdigest()[:8]
+
+
+def _input_flags(flags: tuple[Flag, ...], metric_names: dict[str, str]) -> list[str]:
+    """The pre-draft flags the memo must disclose, one line each, except that metrics with
+    no value (one flag per metric) are listed together."""
+    def no_value(f: Flag) -> bool:
+        return f.code == "missing_input" and f.ref in metric_names and f.message.endswith("has no value")
+
+    empty = [metric_names[f.ref] for f in flags if no_value(f) and f.ref]
+    out = [f"{f.code} ({f.ref}): {f.message}" for f in flags if f.code in INPUT_FLAGS and not no_value(f)]
+    if empty:
+        out.append(f"missing_input (metrics): no value for {', '.join(empty)}")
+    return out
+
+
+def _claim_inputs(claims: dict[str, Claim], documents: dict[str, Document]) -> list[dict]:
+    """Claims as the drafter sees them: each quote with its document's form and filing date."""
+    out = []
+    for c in claims.values():
+        d = c.model_dump(mode="json")
+        for e in d["evidence"]:
+            doc = documents.get(e["doc_id"])
+            if doc is not None:
+                e["form"], e["filed"] = doc.form, doc.filed.isoformat()
+        out.append(d)
+    return out
 
 
 class Workstation:
@@ -81,15 +122,17 @@ class Workstation:
         claims = {c.id: c for c in kept_f + kept_b}
         dropped = {**dropped_f, **dropped_b}
 
+        input_flags = _input_flags(state.flags, {m.id: m.name for m in state.metrics})
         feedback: list[str] = []
         for attempt in range(1, self.max_redrafts + 2):
             memo = self.llm.complete_json(
                 role="orchestrator_draft", task=DRAFT_TASK, schema=DraftMemo,
                 inputs={"request": request.model_dump(mode="json"), "plan": plan.model_dump(mode="json"),
-                        "claims": [c.model_dump(mode="json") for c in claims.values()],
+                        "claims": _claim_inputs(claims, state.documents),
                         "metrics": [m.model_dump(mode="json") for m in state.metrics],
                         "context": [c.model_dump(mode="json") for c in state.context],
                         "gaps": [*notes.gaps, *bear.gaps],
+                        "input_flags": input_flags,
                         "feedback": feedback})
             state.write("orchestrator", "draft_memo", memo)
             calcs, errors = run_calculations(memo.calculations, state.metrics, state.context, claims, request.as_of)

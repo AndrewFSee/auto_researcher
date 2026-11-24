@@ -83,6 +83,7 @@ class Metric(BaseModel):
     source: str
     snapshot_id: str
     max_age_days: int | None = Field(default=None, description="older than this is stale; None: the gate's default")
+    definition: str | None = Field(default=None, description="what the number is and how to read it (from the tool)")
 
 
 class ContextItem(BaseModel):
@@ -96,6 +97,7 @@ class ContextItem(BaseModel):
     is_forecast: bool = False
     track_record: str | None = Field(default=None, description="measured out-of-sample skill, if any")
     max_age_days: int | None = Field(default=None, description="older than this is stale; None: the gate's default")
+    definition: str | None = Field(default=None, description="what the value is and how to read it (from the tool)")
 
 
 class Paragraph(BaseModel):

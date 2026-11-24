@@ -263,8 +263,10 @@ def check_memo(memo: DraftMemo, request: Request, claims: dict[str, Claim], drop
                 elif "[" in used and used.split("[", 1)[0] in claims:
                     texts += [e.quote for e in claims[used.split("[", 1)[0]].evidence]
         sourced = [n for s in texts for n in numbers_in(s)]
-        names = [*(m_by_id[x].name for x in p.metric_ids if x in m_by_id),
-                 *(c_by_id[x].name for x in p.context_ids if x in c_by_id)]
+        # Windows in a cited item's name or definition ("21-trading-day") are not data.
+        cited_items: list[Metric | ContextItem] = [*(m_by_id[x] for x in p.metric_ids if x in m_by_id),
+                       *(c_by_id[x] for x in p.context_ids if x in c_by_id)]
+        names = [s for it in cited_items for s in (it.name, it.definition or "")]
         windows = {int(x) for name in names for x in re.findall(r"\d+", name)}
         text = p.text.replace(request.as_of.isoformat(), " ").replace(request.horizon, " ")
         for num in numbers_in(text):

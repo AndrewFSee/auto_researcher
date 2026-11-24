@@ -60,7 +60,42 @@ CATALOGUE: dict[str, str] = {
     "growth_score": "TickerLake style: growth score (z, S&P 500)",
     "buybacks_remaining_authorization": "TickerLake: remaining buyback authorization, USD (snapshot)",
     "buyback_blackout": "TickerLake: estimated buyback blackout window (snapshot)",
-    "eps_revisions_30d": "TickerLake: net EPS-estimate revisions over 30 days (snapshot)",
+    "eps_revisions_30d": "TickerLake: 30-day change in the next fiscal year's consensus EPS estimate (snapshot)",
+}
+
+# How to read each value, given to the drafter with the item (``ContextItem.definition``).
+# The 2026-10-15 pilot's review found memos reading a 2nd-percentile spread as "tight
+# credit" and comparing the vol premium with 63-day realized vol. The plan sees only
+# CATALOGUE (to choose items), so these notes don't change the plan's inputs.
+READINGS: dict[str, str] = {
+    "recession_probability": ("A nowcast of whether the US is in recession now, not a forecast for the memo's "
+                              "horizon: its 12-month-ahead skill is chance. Its as_of is the date of the data, "
+                              "which can lag the memo's date by weeks."),
+    "credit_stress_probability": ("The probability that credit is in a stress regime now, not a forecast; it "
+                                  "switched on late in March 2020."),
+    "baa_spread_bps": "Higher means costlier corporate credit; lower means cheaper and easier credit.",
+    "baa_spread_percentile": ("Share of days since 1990 with a spread at or below today's. A low percentile means "
+                              "spreads are narrow: credit is cheap and easy to get (loose, not tight, credit "
+                              "conditions). Narrow spreads leave more room to widen than to narrow, but the level "
+                              "is not a forecast."),
+    "credit_spread_forecast_5d_bps": "Positive means the spread is forecast to widen over the next 5 trading days.",
+    "implied_vol_30d": "Annualized, in volatility points.",
+    "implied_vol_30d_percentile_1y": "Share of the past year's days with implied vol at or below today's.",
+    "skew_rr25_30d": ("25-delta call implied vol minus 25-delta put implied vol. Negative means puts are priced above "
+                      "calls. It compares puts with calls, not implied with realized volatility."),
+    "vol_risk_premium_30d": ("30-day at-the-money implied vol minus the stock's 21-trading-day close-to-close "
+                             "realized vol, in volatility points. It is not comparable with a 63-day realized "
+                             "volatility metric."),
+    "vol_forecast_21d": "Annualized volatility forecast for the next 21 trading days.",
+    "return_band_90_21d_low": "As a return from the last price; negative means a fall.",
+    "return_band_90_21d_high": "As a return from the last price.",
+    "p_up_21d": "Augury does not score its direction calls: there is no measured skill behind this number.",
+    "value_score": ("Describes the stock's style relative to the S&P 500 (0 is average); it has shown no skill at "
+                    "predicting returns."),
+    "growth_score": ("Describes the stock's style relative to the S&P 500 (0 is average); it has shown no skill at "
+                     "predicting returns."),
+    "buyback_blackout": "Estimated from the company's reporting calendar, not disclosed by the company.",
+    "eps_revisions_30d": "Positive means analysts raised the estimate over the past 30 days.",
 }
 
 
@@ -107,7 +142,8 @@ class HubContext:
             fn: Callable[[str, date], dict | None] | None = getattr(self, f"_{name}", None)
             got = fn(ticker, as_of) if fn and name in CATALOGUE else None
             if got:
-                out.append(ContextItem(id=f"x{i}", name=name, **got))
+                definition = " ".join(filter(None, [CATALOGUE[name] + ".", READINGS.get(name)]))
+                out.append(ContextItem(id=f"x{i}", name=name, definition=definition, **got))
         return out
 
     def _recession_probability(self, ticker: str, as_of: date) -> dict | None:
@@ -293,6 +329,7 @@ class HubContext:
         row = r[r["symbol"] == ticker]
         if row.empty or pd.isna(row["rev_30d"].iloc[0]):
             return None
-        return {"value": float(row["rev_30d"].iloc[0]), "as_of": date.fromisoformat(s["snapshot_date"]),
+        # Published in percent (5.0 is +5%).
+        return {"value": float(row["rev_30d"].iloc[0]) / 100, "unit": "pct", "as_of": date.fromisoformat(s["snapshot_date"]),
                 "source": f"TickerLake Yahoo consensus snapshots since {s.get('first_snapshot')} via market-compass",
                 "track_record": f"not measured: snapshots began {s.get('first_snapshot')}", "max_age_days": 3}

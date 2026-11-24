@@ -205,8 +205,27 @@ def test_metrics_use_only_filed_data_and_compute_from_code(tmp_path):
     pd.concat([facts, extra, stb]).to_parquet(tmp_path / "filings_facts" / "sym_ACME.parquet")
     assert TickerLakeMetrics(tmp_path).compute("ACME", date(2026, 3, 31))["total_debt"][0] == pytest.approx(440e6 + 100e6)
     got = tool.metrics("ACME", ["revenue_growth", "gross_margin", "not_a_metric"], date(2026, 3, 31))
-    assert [(m.name, m.value is None) for m in got] == [("revenue_growth", False), ("gross_margin", True)]
+    assert [(m.name, m.value is None) for m in got] == [("revenue_growth", False), ("gross_margin", True),
+                                                        ("gross_margin_1y_ago", True)]
     assert got[0].available_date == date(2026, 2, 20) and got[0].max_age_days == 200
+    assert got[0].definition.startswith("TTM revenue vs the TTM a year earlier")
+
+
+def test_margins_and_multiples_come_with_their_values_a_year_earlier(tmp_path):
+    from auto_researcher.workstation.gates import check_inputs
+    tool = TickerLakeMetrics(_tickerlake(tmp_path))
+    as_of = date(2026, 3, 31)
+    got = {m.name: m for m in tool.metrics("ACME", ["operating_margin", "pe_ttm", "revenue_ttm"], as_of)}
+    assert set(got) == {"operating_margin", "pe_ttm", "revenue_ttm", "operating_margin_1y_ago", "pe_ttm_1y_ago"}
+    then = tool.compute("ACME", date(2025, 3, 31))
+    assert got["pe_ttm_1y_ago"].value == pytest.approx(then["pe_ttm"][0])
+    assert got["operating_margin_1y_ago"].value == pytest.approx(0.15) and got["operating_margin"].value == pytest.approx(0.15)
+    assert got["operating_margin_1y_ago"].available_date == date(2025, 2, 20)
+    assert "a year before the as-of date" in got["pe_ttm_1y_ago"].definition
+    assert "lowers P/E" in got["pe_ttm"].definition
+    assert got["pe_ttm"].period.startswith("price 2026-03-31, fundamentals to 2025-12-31")
+    assert sorted(m.id for m in got.values()) == ["m1", "m2", "m3", "m4", "m5"]
+    assert check_inputs(list(got.values()), [], as_of) == []   # a year old by design, not stale
 
 
 # -- market-compass context ------------------------------------------------------------------
@@ -235,6 +254,8 @@ def test_hub_context_uses_history_with_lags_and_refuses_old_snapshots(tmp_path):
     assert today["recession_probability"].value == 0.35 and today["recession_probability"].as_of == date(2026, 3, 31)
     assert "AUC 0.936" in today["recession_probability"].track_record
     assert today["value_score"].value == 0.7 and "t 0.24" in today["value_score"].track_record
+    assert "not a forecast for the memo's horizon" in today["recession_probability"].definition
+    assert today["value_score"].definition.startswith("TickerLake style: value score")
     # An earlier date gets the walk-forward history, lagged for publication, not today's nowcast.
     past = {c.name: c for c in hub.context("ACME", ["recession_probability", "value_score"], date(2026, 3, 20))}
     assert past["recession_probability"].value == 0.1 and past["recession_probability"].as_of == date(2026, 1, 31)

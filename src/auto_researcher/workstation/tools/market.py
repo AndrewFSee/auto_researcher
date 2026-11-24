@@ -63,6 +63,22 @@ CATALOGUE: dict[str, tuple[Unit, str]] = {
 }
 PRICE_METRICS = {"price", "return_1m", "return_12m", "return_12m_vs_spy", "volatility_63d", "max_drawdown_252d",
                  "beta_252d"}
+MIXED_METRICS = {"market_cap", "pe_ttm", "ev_to_ebitda", "fcf_yield"}   # last close with filed fundamentals
+# Given to the drafter with the metric (``Metric.definition``) where the catalogue line
+# alone invites a misreading.
+READINGS: dict[str, str] = {
+    "beta_252d": ("Beta is correlation times the ratio of the stock's volatility to SPY's: a low beta can go with "
+                  "high volatility when correlation is low. It is not a measure of total risk."),
+    "pe_ttm": "A one-off gain raises net income and so lowers P/E; a one-off charge raises it.",
+    "ev_to_ebitda": "A one-off gain in operating income raises EBITDA and so lowers EV/EBITDA.",
+    "return_12m": "A price return alone does not show whether the valuation multiple changed.",
+}
+# For a claim that a multiple or margin has changed, the drafter needs both values: when
+# the plan asks for one of these, the data analyst also gets its value computed with only
+# the data public a year before the as-of date (name + "_1y_ago"). Not in CATALOGUE, so
+# the plan's inputs don't change.
+PAST_METRICS = ("gross_margin", "operating_margin", "net_margin", "pe_ttm", "ev_to_ebitda", "fcf_yield")
+PAST_DAYS = 365
 
 
 def facts_frame(raw: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -192,21 +208,37 @@ class TickerLakeMetrics:
         values = self.compute(ticker, as_of)
         out = []
         for i, name in enumerate(names, 1):
-            if name not in CATALOGUE:
-                continue
-            unit = CATALOGUE[name][0]
-            v = values.get(name)
-            if v is None:
-                out.append(Metric(id=f"m{i}", name=name, value=None, unit=unit, as_of=as_of, source="TickerLake",
-                                  snapshot_id="unavailable"))
-                continue
-            value, data_date, available, snap = v
-            price = name in PRICE_METRICS
-            out.append(Metric(id=f"m{i}", name=name, value=value, unit=unit, as_of=data_date, available_date=available,
-                              period=None if price else f"to {data_date}", source="TickerLake " +
-                              ("OHLCV" if price else "SEC company facts"), snapshot_id=snap,
-                              max_age_days=PRICE_MAX_AGE if price else FUNDAMENTAL_MAX_AGE))
+            if name in CATALOGUE:
+                out.append(self._metric(f"m{i}", name, name, values.get(name), as_of))
+        past = [n for n in PAST_METRICS if n in names]
+        if past:
+            then = self.compute(ticker, as_of - timedelta(days=PAST_DAYS))
+            for k, name in enumerate(past, len(names) + 1):
+                out.append(self._metric(f"m{k}", f"{name}_1y_ago", name, then.get(name), as_of - timedelta(days=PAST_DAYS),
+                                        extra_age=PAST_DAYS))
         return out
+
+    @staticmethod
+    def _metric(mid: str, name: str, base: str, v: tuple[float, date, date, str] | None, as_of: date,
+                extra_age: int = 0) -> Metric:
+        unit, desc = CATALOGUE[base]
+        definition = " ".join(filter(None, [desc + ".", READINGS.get(base)]))
+        if extra_age:
+            definition = f"{definition} Computed with only the data public on {as_of}, a year before the as-of date."
+        if v is None:
+            return Metric(id=mid, name=name, value=None, unit=unit, as_of=as_of, source="TickerLake",
+                          snapshot_id="unavailable", definition=definition)
+        value, data_date, available, snap = v
+        if base in PRICE_METRICS:
+            period, max_age = None, PRICE_MAX_AGE
+        elif base in MIXED_METRICS:
+            # Dated by the last close, but built on the latest filed period: say both.
+            period, max_age = f"price {data_date}, fundamentals to {snap.rsplit('@', 1)[-1]}", PRICE_MAX_AGE
+        else:
+            period, max_age = f"to {data_date}", FUNDAMENTAL_MAX_AGE
+        return Metric(id=mid, name=name, value=value, unit=unit, as_of=data_date, available_date=available,
+                      period=period, source="TickerLake " + ("OHLCV" if base in PRICE_METRICS else "SEC company facts"),
+                      snapshot_id=snap, definition=definition, max_age_days=max_age + extra_age)
 
     def compute(self, ticker: str, as_of: date) -> dict[str, tuple[float, date, date, str]]:
         """name -> (value, data date, date it became public, snapshot id)."""

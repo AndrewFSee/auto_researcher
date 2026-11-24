@@ -276,3 +276,30 @@ def test_trillions_and_table_units_are_read():
     table = numbers_in("Net income 21,155 14,987")      # a filing table "in millions"
     assert _matches(numbers_in("$21.2bn")[0], [], table)
     assert not _matches(numbers_in("$22.2bn")[0], [], table)
+
+
+def test_drafter_sees_input_flags_and_each_quotes_filing():
+    newer = [*METRICS[:2], METRICS[2].model_copy(update={"available_date": date(2026, 11, 3)})]
+    _, _, llm = run(metrics=newer)
+    inputs = next(c for c in llm.calls if c["role"] == "orchestrator_draft")["inputs"]
+    assert any(f.startswith("missing_input (filings)") for f in inputs["input_flags"])
+    quote = inputs["claims"][0]["evidence"][0]
+    assert quote["form"] == "10-K" and quote["filed"] == "2026-02-20"
+    _, _, llm = run()
+    assert next(c for c in llm.calls if c["role"] == "orchestrator_draft")["inputs"]["input_flags"] == []
+    empty = [*METRICS[:1], metric("m2", "cfo_to_net_income", None, "ratio"), metric("m3", "net_debt_to_ebitda", None, "x")]
+    _, _, llm = run(metrics=empty, max_redrafts=0)
+    flags = next(c for c in llm.calls if c["role"] == "orchestrator_draft")["inputs"]["input_flags"]
+    assert flags == ["missing_input (metrics): no value for cfo_to_net_income, net_debt_to_ebitda"]
+
+
+def test_windows_in_a_definition_are_not_data():
+    vrp = metric("m9", "volatility_63d", 0.344, "pct").model_copy(
+        update={"definition": "implied vol minus 21-trading-day realized vol"})
+    from auto_researcher.workstation.gates import check_memo
+    from auto_researcher.workstation.schemas import DraftMemo
+    memo = DraftMemo.model_validate(draft([para("Risks", "Realized vol over 21 days was 34.4%.", metrics=["m9"])]))
+    req = Request(ticker="ACME", as_of=AS_OF, question="q")
+    assert check_memo(memo, req, {}, {}, [vrp], []) == []
+    assert [f.code for f in check_memo(memo, req, {}, {}, [vrp.model_copy(update={"definition": None})], [])] \
+        == ["number_mismatch"]
