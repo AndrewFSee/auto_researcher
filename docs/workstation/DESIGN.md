@@ -221,6 +221,14 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
      needs both values; say so when combining dates or periods; work out the direction
      of a distortion from the formula.
 
+   The rerun with these fixes (10 memos, $4.57 spent, drafts only) turned up two more
+   problems. First, TickerLake's closes are split-adjusted back in time while filed share
+   counts are not. Year-ago market caps, and so NFLX's year-ago P/E, came out 10 times too
+   small, and its share-count change came out at +880%; both memos were given the latter.
+   Share counts are now put on the closes' split basis (`TickerLakeMetrics.on_price_basis`).
+   Second, one JPM redraft spent its 32k output tokens, most of them on thinking, and was
+   cut off; drafts now get 64k (`DRAFT_MAX_TOKENS`).
+
    Unsupported wording is still checked by no code. The next step is a verifier that
    reads each paragraph against its cited quotes, measured first against your 181
    marks.

@@ -177,6 +177,7 @@ class TickerLakeMetrics:
         self.root = root
         self._tables: dict[str, pd.DataFrame] = {}
         self._raw: dict[str, pd.DataFrame] = {}
+        self._splits: dict[str, pd.Series] = {}
 
     def available(self) -> dict[str, str]:
         return {k: v[1] for k, v in CATALOGUE.items()}
@@ -202,6 +203,29 @@ class TickerLakeMetrics:
         t["date"] = pd.to_datetime(t["date"])
         t = t[t["date"] <= pd.Timestamp(as_of)]
         return t.pivot_table(index="date", columns="symbol", values=["close", "adj_close"]).sort_index()
+
+    def splits(self, symbol: str) -> pd.Series:
+        """Split ratios by date (10.0 for 10-for-1), all years."""
+        if symbol not in self._splits:
+            d = ds.dataset(self.root / "ohlcv", format="parquet", partitioning="hive")
+            if "stock_splits" not in d.schema.names:
+                self._splits[symbol] = pd.Series(dtype=float)
+            else:
+                t = d.to_table(filter=ds.field("symbol") == pa.scalar(symbol),
+                               columns=["date", "stock_splits"]).to_pandas()
+                t = t[t["stock_splits"].fillna(0) > 0]
+                self._splits[symbol] = pd.Series(t["stock_splits"].to_numpy(float),
+                                                 index=pd.to_datetime(t["date"])).sort_index()
+        return self._splits[symbol]
+
+    def on_price_basis(self, symbol: str, shares: Point) -> Point:
+        """A share count on the split basis of the stored closes, which are adjusted for every
+        split up to the download. A filing reports counts on the basis of its filing date, so
+        the splits after that date apply (NFLX: 425M shares reported in July 2025 are 4.25B
+        after the 10-for-1 split of 2025-11-17)."""
+        sp = self.splits(symbol)
+        factor = float(np.prod(sp[sp.index > pd.Timestamp(shares.available)].to_numpy())) if len(sp) else 1.0
+        return Point(shares.value * factor, shares.period_end, shares.available)
 
     # -- metrics ---------------------------------------------------------------------
     def metrics(self, ticker: str, names: list[str], as_of: date) -> list[Metric]:
@@ -302,8 +326,10 @@ class TickerLakeMetrics:
                 put(name, p.value, p)
         put("sbc_to_revenue", ratio(sbc, rev), sbc, rev)
         sh = latest(t, "shares_diluted", as_of)
+        sh = self.on_price_basis(ticker, sh) if sh else None
         if sh:
             prev = latest(t, "shares_diluted", as_of, sh.period_end - timedelta(days=365), 20)
+            prev = self.on_price_basis(ticker, prev) if prev else None
             put("share_count_change_1y", sh.value / prev.value - 1 if prev and prev.value else None, sh, prev)
 
         px = self.prices([ticker, "SPY"], as_of)
@@ -336,7 +362,8 @@ class TickerLakeMetrics:
                 mput("beta_252d", float(both["s"].cov(both["m"]) / both["m"].var()) if len(both) > 200 else None)
         mput("volatility_63d", float(r.iloc[-63:].std() * np.sqrt(252)) if len(r) >= 63 else None)
 
-        shares = latest(t, "shares_cover", as_of) or sh
+        cover = latest(t, "shares_cover", as_of)
+        shares = self.on_price_basis(ticker, cover) if cover else sh
         if shares:
             mcap = close * shares.value
             out["market_cap"] = (mcap, last, last, f"{snap}+facts/{ticker}@{shares.period_end}")

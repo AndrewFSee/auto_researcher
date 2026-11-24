@@ -103,6 +103,12 @@ def call_cost(model: str, usage: dict[str, int]) -> float | None:
             + usage["cache_read_input_tokens"] * p["cache_read"] + usage["output_tokens"] * p["output"]) / 1e6
 
 
+# A draft thinks long: one 2026-10-15 pilot redraft (JPM) spent its 32k on ~27k of
+# thinking and was cut off. Only the draft gets more, so the other roles' requests (and
+# their cached replies) are unchanged. Opus 5.5's synchronous limit is 128k.
+DRAFT_MAX_TOKENS = 64000
+
+
 class ClaudeLLM:
     def __init__(self, client: Any, models: dict[str, str] | None = None, effort: str = "high",
                  max_tokens: int = 32000) -> None:
@@ -117,7 +123,7 @@ class ClaudeLLM:
     def params(self, role: str, task: str, inputs: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
         return {
             "model": self.models[role],
-            "max_tokens": self.max_tokens,
+            "max_tokens": DRAFT_MAX_TOKENS if role == "orchestrator_draft" else self.max_tokens,
             "system": [{"type": "text", "text": PREAMBLE + task, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": render_inputs(inputs)}],
             "thinking": {"type": "adaptive"},

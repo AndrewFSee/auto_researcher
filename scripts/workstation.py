@@ -20,7 +20,7 @@ import argparse
 import json
 import logging
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -127,7 +127,9 @@ def cmd_batch(args) -> None:
     total = sum(r["cost"] for r in rows)
     print(f"total ${total:.2f} at batch prices over {len(batcher.batches)} batches: "
           f"{[(b['requests'], b['seconds']) for b in batcher.batches]}")
-    out = Path(args.runs).parent / "pilots" / f"{as_of}_{len(tickers)}.json"
+    out = Path(args.runs).parent / "pilots" / f"{as_of}_{len(tickers)}{'_' + args.label if args.label else ''}.json"
+    if out.exists():   # an earlier pilot's summary (its review page reads it): keep it
+        out = out.with_name(f"{out.stem}_{datetime.now():%Y%m%d%H%M}.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps({"as_of": as_of.isoformat(), "question": args.question, "memos": rows,
                                "batches": batcher.batches, "cost": total}, indent=1), encoding="utf-8")
@@ -171,6 +173,7 @@ def main() -> None:
     b.add_argument("--horizon", default="12m")
     b.add_argument("--effort", default="high", choices=["low", "medium", "high"])
     b.add_argument("--poll", type=float, default=30.0, help="seconds between batch status checks")
+    b.add_argument("--label", default="", help="suffix for the pilot summary's file name")
     b.add_argument("--env-file", type=Path, default=ENV_FILE)
     b.set_defaults(fn=cmd_batch)
     sub.add_parser("runs").set_defaults(fn=cmd_runs)

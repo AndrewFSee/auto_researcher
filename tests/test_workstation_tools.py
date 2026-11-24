@@ -94,6 +94,7 @@ def test_claude_client_routes_roles_validates_and_costs():
     with pytest.raises(LLMError):
         llm.complete_json(role="filing_analyst", task="t", inputs={}, schema=ResearchNotes)
     assert client.params[1]["model"] == "claude-sonnet-5-5"
+    assert p["max_tokens"] == 32000 and llm.params("orchestrator_draft", "t", {}, Plan)["max_tokens"] == 64000
     assert llm.training_cutoff == date(2026, 7, 1)
 
 
@@ -261,3 +262,24 @@ def test_hub_context_uses_history_with_lags_and_refuses_old_snapshots(tmp_path):
     assert past["recession_probability"].value == 0.1 and past["recession_probability"].as_of == date(2026, 1, 31)
     assert past["value_score"].value == 0.5
     assert hub.context("ACME", ["p_up_21d", "eps_revisions_30d"], date(2026, 4, 21)) == []  # no snapshots here
+
+
+def test_share_counts_are_put_on_the_split_basis_of_the_prices(tmp_path):
+    root = _tickerlake(tmp_path)
+    # A 2-for-1 split on 2025-06-02: the stored closes are already adjusted for it; the FY2024
+    # 10-K (filed before it) reports 10M shares, the FY2025 10-K (filed after) 20M.
+    for part in (root / "ohlcv").rglob("*.parquet"):
+        g = pd.read_parquet(part)
+        g["stock_splits"] = np.where(g["date"] == "2025-06-02", 2.0, 0.0)
+        g.to_parquet(part, index=False)
+    facts = _facts()
+    cover = facts["concept"] == "EntityCommonStockSharesOutstanding"
+    facts.loc[cover & (facts["filed_date"] == "2026-02-20"), "value"] = 20e6
+    diluted = facts[cover].assign(concept="WeightedAverageNumberOfDilutedSharesOutstanding", taxonomy="us-gaap",
+                                  start_date=lambda d: d["end_date"].str[:4] + "-01-01")
+    pd.concat([facts, diluted]).to_parquet(root / "filings_facts" / "sym_ACME.parquet")
+    tool = TickerLakeMetrics(root)
+    now, then = tool.compute("ACME", date(2026, 3, 31)), tool.compute("ACME", date(2025, 3, 31))
+    assert now["market_cap"][0] == pytest.approx(now["price"][0] * 20e6)
+    assert then["market_cap"][0] == pytest.approx(then["price"][0] * 20e6)   # 10M before the split = 20M now
+    assert now["share_count_change_1y"][0] == pytest.approx(0.0)              # not +100%
