@@ -104,21 +104,34 @@ def evaluate(expr: str, metrics: dict[str, Metric], context: dict[str, ContextIt
 def run_calculations(calcs: list[Calculation], metrics: list[Metric], context: list[ContextItem],
                      claims: dict[str, Claim], as_of: date) -> tuple[list[Metric], dict[str, str]]:
     """(calculated metrics, calculation id -> error). A calculation's data date is the
-    latest of its inputs'; quoted filing numbers count as of the run's date."""
+    latest of its inputs'; quoted filing numbers count as of the run's date.
+
+    A calculation may use other calculations' results (``c8 = c7 / m3``), in any order:
+    calculations are evaluated in passes until no more succeed, so one that rests on a
+    failed or circular calculation fails too."""
     m_by_id, c_by_id = {m.id: m for m in metrics}, {c.id: c for c in context}
-    out: list[Metric] = []
+    done: dict[str, Metric] = {}
     errors: dict[str, str] = {}
-    for calc in calcs:
-        try:
-            value, used = evaluate(calc.expression, m_by_id, c_by_id, claims)
-        except CalcError as e:
-            errors[calc.id] = str(e)
-            continue
-        dates = [m_by_id[u].as_of for u in used if u in m_by_id] + [c_by_id[u].as_of for u in used if u in c_by_id]
-        public = [m_by_id[u].available_date for u in used if u in m_by_id and m_by_id[u].available_date]
-        out.append(Metric(id=calc.id, name=calc.description, value=value, unit=calc.unit,
-                          as_of=max(dates) if dates else as_of,
-                          available_date=max(d for d in public if d) if public else None,
-                          source=f"calculation: {calc.expression}", snapshot_id="calc:" + ";".join(used),
-                          max_age_days=100_000))
-    return out, errors
+    pending = list(calcs)
+    while pending:
+        waiting = []
+        for calc in pending:
+            known = {**m_by_id, **done}
+            try:
+                value, used = evaluate(calc.expression, known, c_by_id, claims)
+            except CalcError as e:
+                errors[calc.id] = str(e)
+                waiting.append(calc)
+                continue
+            errors.pop(calc.id, None)
+            dates = [known[u].as_of for u in used if u in known] + [c_by_id[u].as_of for u in used if u in c_by_id]
+            public = [d for u in used if u in known and (d := known[u].available_date)]
+            done[calc.id] = Metric(id=calc.id, name=calc.description, value=value, unit=calc.unit,
+                                   as_of=max(dates) if dates else as_of,
+                                   available_date=max(public) if public else None,
+                                   source=f"calculation: {calc.expression}", snapshot_id="calc:" + ";".join(used),
+                                   max_age_days=100_000)
+        if len(waiting) == len(pending):
+            break
+        pending = waiting
+    return [done[c.id] for c in calcs if c.id in done], errors

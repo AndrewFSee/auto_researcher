@@ -251,7 +251,35 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
    |---|---|---|---|---|---|
    | Original (Opus) | 2,208 | $0.38 | 0 | 33% | 7.2 |
    | Opus, review fixes | 2,408 | $0.48 | 1 | 17% | 3.4 |
+   | Opus, review fixes, about 12 paragraphs | 2,044 | $0.48 | 0 | 12% | 1.6 |
    | Sonnet, medium, about 12 paragraphs | 1,035 | $0.21 | 5 | 27% | 3.7 |
+
+   With the length target, Opus writes fewer but longer paragraphs, so it costs no less.
+   The cost lever is the redraft. Memos passing on the first draft cost about $0.20; the
+   five that were redrafted cost about $0.47 each. Every redraft was triggered by one to
+   three figures, or in one case by a calculation that used another calculation's result,
+   which the calculator did not allow.
+
+   **Repair instead of redraft** (`repair.py`, now the default). A failed draft goes back
+   with its problems. The model returns only the paragraphs they name, rewritten, and any
+   calculations, omissions or added paragraphs the problems need. Code splices these in,
+   refuses changes to paragraphs no problem names, and checks the repaired memo again from
+   scratch. Calculations may now use other calculations (`c8 = c7 / m3`). The drafter is
+   not told; it already did so unprompted.
+
+   The run below used the same cached first drafts as the 12-paragraph run, so it differs
+   only in how failures were fixed. NEE's draft now passes with no fix, because its chained
+   calculation evaluates. The other four failures were repaired at about $0.075 each,
+   against about $0.27 for a redraft. All ten memos pass.
+
+   | 12 paragraphs | cost per memo | paragraphs flagged | issues per memo |
+   |---|---|---|---|
+   | redraft | $0.48 | 12% | 1.6 |
+   | repair | $0.38 | 15% | 1.9 |
+
+   The small difference in flags is in paragraphs a redraft rewrites but a repair keeps:
+   NEE is 4 of 12 unrepaired against 2 of 12 redrafted. The first draft is now most of
+   the cost, about $0.21 a memo.
 
    A caveat: the verifier reads the same definitions the fixed drafter now gets, so part
    of the drop may be the two agreeing rather than the memo being better. Sonnet's five

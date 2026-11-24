@@ -91,11 +91,14 @@ def draft(paragraphs=GOOD, omitted=None):
 
 
 def run(docs=(MDA, RISKS, LATE), metrics=METRICS, context=(MACRO, BANDS), filing=FILING, bear=BEAR,
-        drafts=None, as_of=AS_OF, cutoff=None, max_redrafts=1, plan=PLAN):
-    llm = ScriptedLLM({"orchestrator_plan": plan, "filing_analyst": filing, "bear_analyst": bear,
-                       "orchestrator_draft": drafts or [draft()]}, training_cutoff=cutoff)
+        drafts=None, as_of=AS_OF, cutoff=None, max_redrafts=1, plan=PLAN, repairs=None):
+    replies = {"orchestrator_plan": plan, "filing_analyst": filing, "bear_analyst": bear,
+               "orchestrator_draft": drafts or [draft()]}
+    if repairs:
+        replies["orchestrator_repair"] = repairs
+    llm = ScriptedLLM(replies, training_cutoff=cutoff)
     ws = Workstation(llm, FixtureFilings(list(docs)), FixtureMetrics(list(metrics)), FixtureContext(list(context)),
-                     max_redrafts=max_redrafts)
+                     max_redrafts=max_redrafts, repair=bool(repairs))
     packet, state = ws.run(Request(ticker="ACME", as_of=as_of, question="Pre-investment memo: earnings quality, "
                                                                         "leverage, downside risks."))
     return packet, state, llm
@@ -338,3 +341,48 @@ def test_verifier_sees_quotes_values_and_definitions_but_not_claim_wording():
     assert isinstance(check, Verification)
     flags = to_flags(check)
     assert [(f.code, f.ref, f.blocking) for f in flags] == [("unsupported_statement", "p1", False)]
+
+
+
+BAD_P2 = draft([*GOOD[:1], para("Leverage", "Net debt is 3.1x EBITDA, against a covenant ceiling of 3.5x.",
+                                ["f2", "b2"], ["m3"]), *GOOD[2:]])
+
+
+def test_a_failed_draft_is_repaired_paragraph_by_paragraph():
+    fix = {"fixes": [{"ref": "p2", "paragraph": GOOD[1]},
+                     {"ref": "p1", "paragraph": para("Earnings quality", "Rewritten without being asked.", ["f1"])}]}
+    packet, state, llm = run(drafts=[BAD_P2], repairs=[fix])
+    assert codes(packet) == [] and len(state.drafts) == 2
+    repair = next(c for c in llm.calls if c["role"] == "orchestrator_repair")
+    assert repair["inputs"]["problems"] == [f for f in repair["inputs"]["problems"] if f.startswith("number_mismatch (p2)")]
+    assert [p["ref"] for p in repair["inputs"]["memo"]] == ["p1", "p2", "p3", "p4"]
+    assert state.drafts[-1].paragraphs[0].text == GOOD[0]["text"]          # p1 was not named: the fix is refused
+    event = next(e for e in state.audit if e["event"] == "draft_repaired")
+    assert event["fixed"] == ["p2", "p1"] and event["refused"] == ["fix of p1: no problem named it"]
+    assert sum(c["role"] == "orchestrator_draft" for c in llm.calls) == 1
+
+
+def test_a_repair_can_add_omissions_and_is_checked_again():
+    no_bear = draft([*GOOD[:2], GOOD[3]])
+    packet, state, _ = run(drafts=[no_bear], repairs=[{"omitted_claims": [
+        {"claim_id": "b1", "reason": "Customer is under contract to 2030."}]}])
+    assert codes(packet) == [] and state.drafts[-1].omitted() == {"b1": "Customer is under contract to 2030."}
+    still_bad = {"fixes": [{"ref": "p2", "paragraph": para("Leverage", "Net debt is 2.9x EBITDA.", ["f2", "b2"], ["m3"])}]}
+    packet, *_ = run(drafts=[BAD_P2], repairs=[still_bad])
+    assert codes(packet) == ["number_mismatch"] and packet.review_required
+
+
+def test_calculations_may_use_earlier_calculations_in_any_order():
+    from auto_researcher.workstation.calc import run_calculations
+    from auto_researcher.workstation.schemas import Calculation
+    calcs = [Calculation(id="c2", description="twice the conversion", expression="c1 * 2", unit="ratio"),
+             Calculation(id="c1", description="conversion", expression="m2 * 1", unit="ratio"),
+             Calculation(id="c3", description="circular", expression="c4 + 1", unit="ratio"),
+             Calculation(id="c4", description="circular", expression="c3 + 1", unit="ratio")]
+    got, errors = run_calculations(calcs, METRICS, [], {}, AS_OF)
+    assert [(m.id, round(m.value, 3)) for m in got] == [("c2", 1.678), ("c1", 0.839)]
+    assert set(errors) == {"c3", "c4"}
+    from auto_researcher.workstation.gates import check_memo
+    from auto_researcher.workstation.schemas import DraftMemo
+    memo = DraftMemo.model_validate(draft([para("EQ", "Conversion of 0.839 doubled is 1.678.", metrics=["c2"])]))
+    assert check_memo(memo, Request(ticker="ACME", as_of=AS_OF, question="q"), {}, {}, [*METRICS, *got], []) == []

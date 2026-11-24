@@ -20,6 +20,7 @@ T = TypeVar("T", bound=BaseModel)
 MODELS = {
     "orchestrator_plan": "claude-opus-5-5",
     "orchestrator_draft": "claude-opus-5-5",
+    "orchestrator_repair": "claude-opus-5-5",
     "filing_analyst": "claude-sonnet-5-5",
     "bear_analyst": "claude-sonnet-5-5",
     "verifier": "claude-sonnet-5-5",
@@ -108,6 +109,7 @@ def call_cost(model: str, usage: dict[str, int]) -> float | None:
 # thinking and was cut off. Only the draft gets more, so the other roles' requests (and
 # their cached replies) are unchanged. Opus 5.5's synchronous limit is 128k.
 DRAFT_MAX_TOKENS = 64000
+LONG_ROLES = ("orchestrator_draft", "orchestrator_repair")
 
 
 class ClaudeLLM:
@@ -125,7 +127,7 @@ class ClaudeLLM:
     def params(self, role: str, task: str, inputs: dict[str, Any], schema: type[BaseModel]) -> dict[str, Any]:
         return {
             "model": self.models[role],
-            "max_tokens": DRAFT_MAX_TOKENS if role == "orchestrator_draft" else self.max_tokens,
+            "max_tokens": DRAFT_MAX_TOKENS if role in LONG_ROLES else self.max_tokens,
             "system": [{"type": "text", "text": PREAMBLE + task, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": render_inputs(inputs)}],
             "thinking": {"type": "adaptive"},

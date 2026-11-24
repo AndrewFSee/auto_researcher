@@ -14,7 +14,8 @@ from .calc import run_calculations
 from .agents import BEAR_TASK, FILING_TASK, BearCaseAnalyst, ContextAnalyst, DataAnalyst, FilingAnalyst
 from .llm import LLM
 from .packet import ReviewPacket, build_packet
-from .schemas import SCHEMA_VERSION, Claim, Document, DraftMemo, Flag, Plan, Request
+from .repair import REPAIR_TASK, apply_repair, repairable
+from .schemas import SCHEMA_VERSION, Claim, Document, DraftMemo, Flag, MemoRepair, Plan, Request
 from .state import WorkflowState
 from .tools.base import ContextTool, FilingTool, MetricTool
 
@@ -54,7 +55,7 @@ INPUT_FLAGS = ("missing_input", "stale_input", "llm_lookahead")
 
 
 def prompt_version(draft_task: str = DRAFT_TASK) -> str:
-    return hashlib.sha256("\n".join([PLAN_TASK, draft_task, FILING_TASK, BEAR_TASK]).encode()).hexdigest()[:8]
+    return hashlib.sha256("\n".join([PLAN_TASK, draft_task, REPAIR_TASK, FILING_TASK, BEAR_TASK]).encode()).hexdigest()[:8]
 
 
 def _input_flags(flags: tuple[Flag, ...], metric_names: dict[str, str]) -> list[str]:
@@ -85,8 +86,10 @@ def _claim_inputs(claims: dict[str, Claim], documents: dict[str, Document]) -> l
 
 class Workstation:
     def __init__(self, llm: LLM, filings: FilingTool, metrics: MetricTool, context: ContextTool,
-                 max_redrafts: int = 1, paragraphs: int | None = None) -> None:
-        self.llm, self.max_redrafts = llm, max_redrafts
+                 max_redrafts: int = 1, paragraphs: int | None = None, repair: bool = True) -> None:
+        # A failed draft is repaired (only the paragraphs its checks name) or, with
+        # repair=False, redrafted whole; max_redrafts bounds either.
+        self.llm, self.max_redrafts, self.repair = llm, max_redrafts, repair
         # A length target for the memo (the draft is most of a memo's cost); None: no target.
         self.draft_task = DRAFT_TASK + (f" Keep the memo to about {paragraphs} paragraphs in all, including the "
                                         "limitations paragraphs: cover what matters most and drop the rest."
@@ -126,30 +129,47 @@ class Workstation:
         claims = {c.id: c for c in kept_f + kept_b}
         dropped = {**dropped_f, **dropped_b}
 
-        input_flags = _input_flags(state.flags, {m.id: m.name for m in state.metrics})
-        feedback: list[str] = []
-        for attempt in range(1, self.max_redrafts + 2):
-            memo = self.llm.complete_json(
-                role="orchestrator_draft", task=self.draft_task, schema=DraftMemo,
-                inputs={"request": request.model_dump(mode="json"), "plan": plan.model_dump(mode="json"),
-                        "claims": _claim_inputs(claims, state.documents),
-                        "metrics": [m.model_dump(mode="json") for m in state.metrics],
-                        "context": [c.model_dump(mode="json") for c in state.context],
-                        "gaps": [*notes.gaps, *bear.gaps],
-                        "input_flags": input_flags,
-                        "feedback": feedback})
-            state.write("orchestrator", "draft_memo", memo)
+        evidence = {"request": request.model_dump(mode="json"), "plan": plan.model_dump(mode="json"),
+                    "claims": _claim_inputs(claims, state.documents),
+                    "metrics": [m.model_dump(mode="json") for m in state.metrics],
+                    "context": [c.model_dump(mode="json") for c in state.context],
+                    "gaps": [*notes.gaps, *bear.gaps],
+                    "input_flags": _input_flags(state.flags, {m.id: m.name for m in state.metrics})}
+
+        def check(memo: DraftMemo, attempt: int) -> list[Flag]:
             calcs, errors = run_calculations(memo.calculations, state.metrics, state.context, claims, request.as_of)
             state.write("calculator", "calculations", calcs)
-            memo_flags = [Flag(code="calculation_error", ref=cid, stage=f"memo_draft_{attempt}",
-                                     message=f"calculation {cid} failed: {err}") for cid, err in errors.items()]
-            memo_flags += gates.check_memo(memo, request, claims, dropped, [*state.metrics, *calcs], state.context,
-                                           stage=f"memo_draft_{attempt}", documents=state.documents)
-            if not any(f.blocking for f in memo_flags) or attempt > self.max_redrafts:
+            flags = [Flag(code="calculation_error", ref=cid, stage=f"memo_draft_{attempt}",
+                          message=f"calculation {cid} failed: {err}") for cid, err in errors.items()]
+            return flags + gates.check_memo(memo, request, claims, dropped, [*state.metrics, *calcs], state.context,
+                                            stage=f"memo_draft_{attempt}", documents=state.documents)
+
+        memo = self.llm.complete_json(role="orchestrator_draft", task=self.draft_task, schema=DraftMemo,
+                                      inputs={**evidence, "feedback": []})
+        state.write("orchestrator", "draft_memo", memo)
+        memo_flags = check(memo, 1)
+        for attempt in range(2, self.max_redrafts + 2):
+            if not any(f.blocking for f in memo_flags):
                 break
-            state.log("gate", "draft_failed", draft=attempt,
+            state.log("gate", "draft_failed", draft=attempt - 1,
                       flags=[f.model_dump(mode="json") for f in memo_flags])
             feedback = [f"{f.code} ({f.ref}): {f.message}" for f in memo_flags if f.blocking]
+            if self.repair:
+                fix = self.llm.complete_json(
+                    role="orchestrator_repair", task=REPAIR_TASK + DRAFT_TASK, schema=MemoRepair,
+                    inputs={**evidence, "memo": [{"ref": f"p{i}", **p.model_dump(mode="json")}
+                                                 for i, p in enumerate(memo.paragraphs, 1)],
+                            "calculations": [c.model_dump(mode="json") for c in memo.calculations],
+                            "omitted_claims": [o.model_dump(mode="json") for o in memo.omitted_claims],
+                            "problems": feedback})
+                memo, refused = apply_repair(memo, fix, repairable(memo_flags))
+                state.log("orchestrator", "draft_repaired", draft=attempt, fixed=[f.ref for f in fix.fixes],
+                          dropped=fix.drop, added=len(fix.added), refused=refused)
+            else:
+                memo = self.llm.complete_json(role="orchestrator_draft", task=self.draft_task, schema=DraftMemo,
+                                              inputs={**evidence, "feedback": feedback})
+            state.write("orchestrator", "draft_memo", memo)
+            memo_flags = check(memo, attempt)
         state.add_flags("gate", memo_flags)
         calls = getattr(self.llm, "calls", None)
         if calls and isinstance(calls[0], dict) and "usage" in calls[0]:

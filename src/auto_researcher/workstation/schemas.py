@@ -113,6 +113,8 @@ class Paragraph(BaseModel):
 class Calculation(BaseModel):
     id: str = Field(description="c1, c2, ...")
     description: str = Field(description="what it is, e.g. 'buybacks plus dividends over free cash flow'")
+    # Calculations may also use other calculations' ids (calc.run_calculations); the text
+    # is left unchanged so cached drafts stay valid (the drafter already chains unprompted).
     expression: str = Field(description="formula over metric ids (m3), context ids (x1) and quoted filing numbers "
                                         "(f6[\"21,155\"]), with + - * / ( ), abs, min, max and constants")
     unit: Unit
@@ -131,6 +133,23 @@ class DraftMemo(BaseModel):
 
     def omitted(self) -> dict[str, str]:
         return {o.claim_id: o.reason for o in self.omitted_claims}
+
+
+class ParagraphFix(BaseModel):
+    ref: str = Field(description="the paragraph replaced: p1, p2, ... as numbered in the memo given")
+    paragraph: Paragraph
+
+
+class MemoRepair(BaseModel):
+    """Changes to a draft that failed its checks: only the paragraphs named in the
+    problems are replaced or dropped; the rest of the memo stays as it was."""
+    fixes: list[ParagraphFix] = Field(default_factory=list, description="each named paragraph, rewritten whole")
+    drop: list[str] = Field(default_factory=list, description="refs of named paragraphs to remove")
+    added: list[Paragraph] = Field(default_factory=list,
+                                   description="new analysis paragraphs, e.g. one using a bear-case claim not yet used")
+    omitted_claims: list[Omission] = Field(default_factory=list, description="claims to list as omitted, with reasons")
+    calculations: list[Calculation] = Field(default_factory=list, description="new calculations, or replacements by id")
+    drop_calculations: list[str] = Field(default_factory=list, description="ids of calculations to remove")
 
 
 FlagCode = Literal["quote_not_found", "uncited_claim", "number_mismatch", "after_as_of", "stale_input",

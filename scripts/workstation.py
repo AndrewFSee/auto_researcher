@@ -36,6 +36,11 @@ from auto_researcher.workstation.tools.market import CATALOGUE as METRICS, Ticke
 
 logger = logging.getLogger("workstation")
 MODELS_BY_NAME = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}
+# About 12 paragraphs: on the 2026-10-15 pilot the verifier flagged 12% of paragraphs at
+# this length against 17% without a target, at the same cost (docs/workstation/DESIGN.md).
+PARAGRAPHS = 12
+PARAGRAPHS_HELP = f"length target for the memo, in paragraphs (default {PARAGRAPHS}; 0: none)"
+NO_REPAIR_HELP = "redraft a failed memo whole instead of repairing the paragraphs its checks name"
 ENV_FILE = Path(r"C:\Users\andre\projects\sentiq\.env")
 DEFAULT_QUESTION = ("Pre-investment memo: business and competitive position, earnings quality, balance sheet and "
                     "leverage, valuation, and the main downside risks over the horizon. Flag anything a reviewer "
@@ -65,7 +70,8 @@ def cmd_memo(args) -> None:
     from auto_researcher.workstation.claude import ClaudeLLM
 
     llm = ClaudeLLM(_client(args.env_file), effort=args.effort)
-    ws = Workstation(llm, LakeFilings(), TickerLakeMetrics(), HubContext())
+    ws = Workstation(llm, LakeFilings(), TickerLakeMetrics(), HubContext(), paragraphs=args.paragraphs or None,
+                     repair=not args.no_repair)
     try:
         packet, state = ws.run(req)
     except Exception:
@@ -108,7 +114,8 @@ def cmd_batch(args) -> None:
 
     def job(t: str):
         def run():
-            ws = Workstation(llms[t], filings, metrics, hub, paragraphs=args.paragraphs)
+            ws = Workstation(llms[t], filings, metrics, hub, paragraphs=args.paragraphs or None,
+                             repair=not args.no_repair)
             packet, state = ws.run(Request(ticker=t, as_of=as_of, question=args.question, horizon=args.horizon))
             return packet, save_run(state, packet, root=args.runs)
         return run
@@ -125,6 +132,7 @@ def cmd_batch(args) -> None:
         blocking = [f.code for f in packet.flags if f.blocking]
         rows.append({"ticker": t, "run": folder.name, "paragraphs": len(packet.paragraphs), "flags": len(packet.flags),
                      "blocking": blocking, "drafts": sum(1 for c in llms[t].calls if c["role"] == "orchestrator_draft"),
+                     "repairs": sum(1 for c in llms[t].calls if c["role"] == "orchestrator_repair"),
                      "cost": cost})
         print(f"{t:6s} {folder.name}  {len(packet.paragraphs):2d} paragraphs  {len(packet.flags)} flags "
               f"({len(blocking)} blocking{': ' + ', '.join(blocking) if blocking else ''})  ${cost:.2f}")
@@ -167,6 +175,8 @@ def main() -> None:
     m.add_argument("--question", default=DEFAULT_QUESTION)
     m.add_argument("--horizon", default="12m")
     m.add_argument("--effort", default="high", choices=["low", "medium", "high"])
+    m.add_argument("--paragraphs", type=int, default=PARAGRAPHS, help=PARAGRAPHS_HELP)
+    m.add_argument("--no-repair", action="store_true", help=NO_REPAIR_HELP)
     m.add_argument("--env-file", type=Path, default=ENV_FILE)
     m.add_argument("--dry-run", action="store_true", help="show what the tools return; no API calls")
     m.set_defaults(fn=cmd_memo)
@@ -180,7 +190,8 @@ def main() -> None:
     b.add_argument("--label", default="", help="suffix for the pilot summary's file name")
     b.add_argument("--draft-model", choices=sorted(MODELS_BY_NAME), help="model for the draft only")
     b.add_argument("--draft-effort", choices=["low", "medium", "high"], help="effort for the draft only")
-    b.add_argument("--paragraphs", type=int, help="length target for the memo, in paragraphs")
+    b.add_argument("--paragraphs", type=int, default=PARAGRAPHS, help=PARAGRAPHS_HELP)
+    b.add_argument("--no-repair", action="store_true", help=NO_REPAIR_HELP)
     b.add_argument("--env-file", type=Path, default=ENV_FILE)
     b.set_defaults(fn=cmd_batch)
     sub.add_parser("runs").set_defaults(fn=cmd_runs)

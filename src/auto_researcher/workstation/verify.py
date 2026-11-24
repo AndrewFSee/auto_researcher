@@ -86,9 +86,13 @@ def verify_inputs(memo: DraftMemo, claims: dict[str, Claim], metrics: list[Metri
                                "filed": doc.filed.isoformat() if doc else None,
                                "section": doc.section if doc else None})
         cited = [m_by_id[x] for x in p.metric_ids if x in m_by_id]
-        # A calculation's inputs are part of what it rests on.
-        for calc in [m for m in cited if m.snapshot_id.startswith("calc:")]:
-            cited += [m_by_id[u] for u in calc.snapshot_id[5:].split(";") if u in m_by_id and m_by_id[u] not in cited]
+        # A calculation's inputs (and theirs, for one built on another) are part of what it rests on.
+        k = 0
+        while k < len(cited):
+            if cited[k].snapshot_id.startswith("calc:"):
+                cited += [m_by_id[u] for u in cited[k].snapshot_id[5:].split(";")
+                          if u in m_by_id and m_by_id[u] not in cited]
+            k += 1
         out.append({"ref": f"p{i}", "section": p.section, "text": p.text, "quotes": quotes,
                     "metrics": [_metric_view(m) for m in cited],
                     "context": [_context_view(c_by_id[x]) for x in p.context_ids if x in c_by_id]})
