@@ -190,8 +190,8 @@ class BatchLLM(ClaudeLLM):
     at batch prices; a reply served from the cache costs nothing again."""
 
     def __init__(self, batcher: Batcher, models: dict[str, str] | None = None, effort: str = "high",
-                 max_tokens: int = 32000) -> None:
-        super().__init__(client=None, models=models, effort=effort, max_tokens=max_tokens)
+                 max_tokens: int = 32000, efforts: dict[str, str] | None = None) -> None:
+        super().__init__(client=None, models=models, effort=effort, max_tokens=max_tokens, efforts=efforts)
         self.batcher = batcher
 
     def complete_json(self, *, role: str, task: str, inputs: dict[str, Any], schema: type[T]) -> T:

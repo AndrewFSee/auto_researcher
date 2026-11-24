@@ -53,8 +53,8 @@ DRAFT_TASK = (
 INPUT_FLAGS = ("missing_input", "stale_input", "llm_lookahead")
 
 
-def prompt_version() -> str:
-    return hashlib.sha256("\n".join([PLAN_TASK, DRAFT_TASK, FILING_TASK, BEAR_TASK]).encode()).hexdigest()[:8]
+def prompt_version(draft_task: str = DRAFT_TASK) -> str:
+    return hashlib.sha256("\n".join([PLAN_TASK, draft_task, FILING_TASK, BEAR_TASK]).encode()).hexdigest()[:8]
 
 
 def _input_flags(flags: tuple[Flag, ...], metric_names: dict[str, str]) -> list[str]:
@@ -85,10 +85,14 @@ def _claim_inputs(claims: dict[str, Claim], documents: dict[str, Document]) -> l
 
 class Workstation:
     def __init__(self, llm: LLM, filings: FilingTool, metrics: MetricTool, context: ContextTool,
-                 max_redrafts: int = 1) -> None:
+                 max_redrafts: int = 1, paragraphs: int | None = None) -> None:
         self.llm, self.max_redrafts = llm, max_redrafts
+        # A length target for the memo (the draft is most of a memo's cost); None: no target.
+        self.draft_task = DRAFT_TASK + (f" Keep the memo to about {paragraphs} paragraphs in all, including the "
+                                        "limitations paragraphs: cover what matters most and drop the rest."
+                                        if paragraphs else "")
         self.filings, self.metrics_tool, self.context_tool = filings, metrics, context
-        self.versions = {"schema": SCHEMA_VERSION, "prompts": prompt_version(), "model": llm.model,
+        self.versions = {"schema": SCHEMA_VERSION, "prompts": prompt_version(self.draft_task),"model": llm.model,
                          "filings": filings.version, "metrics": metrics.version, "context": context.version}
 
     def run(self, request: Request) -> tuple[ReviewPacket, WorkflowState]:
@@ -126,7 +130,7 @@ class Workstation:
         feedback: list[str] = []
         for attempt in range(1, self.max_redrafts + 2):
             memo = self.llm.complete_json(
-                role="orchestrator_draft", task=DRAFT_TASK, schema=DraftMemo,
+                role="orchestrator_draft", task=self.draft_task, schema=DraftMemo,
                 inputs={"request": request.model_dump(mode="json"), "plan": plan.model_dump(mode="json"),
                         "claims": _claim_inputs(claims, state.documents),
                         "metrics": [m.model_dump(mode="json") for m in state.metrics],

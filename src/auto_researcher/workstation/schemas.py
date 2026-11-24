@@ -135,12 +135,13 @@ class DraftMemo(BaseModel):
 
 FlagCode = Literal["quote_not_found", "uncited_claim", "number_mismatch", "after_as_of", "stale_input",
                    "missing_input", "bear_case_dropped", "skill_not_stated", "possible_injection", "llm_lookahead",
-                   "calculation_error"]
+                   "calculation_error", "unsupported_statement"]
 
 BLOCKING: dict[str, bool] = {
     "quote_not_found": False, "uncited_claim": True, "number_mismatch": True, "after_as_of": True,
     "stale_input": False, "missing_input": False, "bear_case_dropped": True, "skill_not_stated": True,
     "possible_injection": True, "llm_lookahead": False, "calculation_error": True,
+    "unsupported_statement": False,   # advisory until the verifier is measured against a reviewer
 }
 
 

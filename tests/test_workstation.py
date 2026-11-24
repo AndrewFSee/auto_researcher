@@ -303,3 +303,38 @@ def test_windows_in_a_definition_are_not_data():
     assert check_memo(memo, req, {}, {}, [vrp], []) == []
     assert [f.code for f in check_memo(memo, req, {}, {}, [vrp.model_copy(update={"definition": None})], [])] \
         == ["number_mismatch"]
+
+
+def test_a_length_target_reaches_only_the_draft():
+    from auto_researcher.workstation.orchestrator import DRAFT_TASK, PLAN_TASK
+    llm = ScriptedLLM({"orchestrator_plan": PLAN, "filing_analyst": FILING, "bear_analyst": BEAR,
+                       "orchestrator_draft": draft()})
+    ws = Workstation(llm, FixtureFilings([MDA, RISKS]), FixtureMetrics(METRICS), FixtureContext([MACRO]), paragraphs=12)
+    packet, _ = ws.run(Request(ticker="ACME", as_of=AS_OF, question="q"))
+    tasks = {c["role"]: c["task"] for c in llm.calls}
+    assert tasks["orchestrator_plan"] == PLAN_TASK and tasks["orchestrator_draft"].startswith(DRAFT_TASK)
+    assert "about 12 paragraphs" in tasks["orchestrator_draft"]
+    assert packet.versions["prompts"] != run()[0].versions["prompts"]
+
+
+def test_verifier_sees_quotes_values_and_definitions_but_not_claim_wording():
+    from auto_researcher.workstation.schemas import Claim, DraftMemo
+    from auto_researcher.workstation.verify import Verification, Verifier, to_flags, verify_inputs
+    claims = {"f1": Claim(id="f1", text="DRAFTER WORDING", evidence=FILING["claims"][0]["evidence"])}
+    calc = metric("c1", "cash conversion", 0.839, "ratio").model_copy(
+        update={"source": "calculation: m2 * 1", "snapshot_id": "calc:m2"})
+    m2 = METRICS[1].model_copy(update={"definition": "cash from operations / net income"})
+    lim = {**para("Gaps", "No segment data."), "kind": "limitations"}
+    memo = DraftMemo.model_validate(draft([para("EQ", "Conversion was 84%.", ["f1"], ["c1"], ["x1"]), lim]))
+    got = verify_inputs(memo, claims, [m2, calc], [MACRO], {MDA.doc_id: MDA})
+    assert [p["ref"] for p in got] == ["p1"]                     # limitations are not checked
+    assert "DRAFTER WORDING" not in str(got) and got[0]["quotes"][0]["form"] == "10-K"
+    assert [m["id"] for m in got[0]["metrics"]] == ["c1", "m2"]   # a calculation brings its inputs
+    assert got[0]["metrics"][0]["formula"] == "m2 * 1" and got[0]["metrics"][1]["definition"].startswith("cash")
+    reply = {"paragraphs": [{"ref": "p1", "verdict": "over", "issues": [
+        {"kind": "overreach", "sentence": "Conversion was 84%.", "why": "one year only"}]}]}
+    check = Verifier(ScriptedLLM({"verifier": reply})).run(memo, claims, [m2, calc], [MACRO], {MDA.doc_id: MDA},
+                                                           AS_OF.isoformat())
+    assert isinstance(check, Verification)
+    flags = to_flags(check)
+    assert [(f.code, f.ref, f.blocking) for f in flags] == [("unsupported_statement", "p1", False)]

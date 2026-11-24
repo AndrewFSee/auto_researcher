@@ -35,6 +35,7 @@ from auto_researcher.workstation.tools.hub import CATALOGUE as CONTEXT, HubConte
 from auto_researcher.workstation.tools.market import CATALOGUE as METRICS, TickerLakeMetrics  # noqa: E402
 
 logger = logging.getLogger("workstation")
+MODELS_BY_NAME = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}
 ENV_FILE = Path(r"C:\Users\andre\projects\sentiq\.env")
 DEFAULT_QUESTION = ("Pre-investment memo: business and competitive position, earnings quality, balance sheet and "
                     "leverage, valuation, and the main downside risks over the horizon. Flag anything a reviewer "
@@ -100,11 +101,14 @@ def cmd_batch(args) -> None:
     tickers = [t.upper() for t in args.tickers]
     batcher = Batcher(_client(args.env_file), ReplyCache(), poll_seconds=args.poll)
     filings, metrics, hub = LakeFilings(), TickerLakeMetrics(), HubContext()
-    llms = {t: BatchLLM(batcher, effort=args.effort) for t in tickers}
+    draft = "orchestrator_draft"
+    llms = {t: BatchLLM(batcher, effort=args.effort,
+                        models={draft: MODELS_BY_NAME[args.draft_model]} if args.draft_model else None,
+                        efforts={draft: args.draft_effort} if args.draft_effort else None) for t in tickers}
 
     def job(t: str):
         def run():
-            ws = Workstation(llms[t], filings, metrics, hub)
+            ws = Workstation(llms[t], filings, metrics, hub, paragraphs=args.paragraphs)
             packet, state = ws.run(Request(ticker=t, as_of=as_of, question=args.question, horizon=args.horizon))
             return packet, save_run(state, packet, root=args.runs)
         return run
@@ -174,6 +178,9 @@ def main() -> None:
     b.add_argument("--effort", default="high", choices=["low", "medium", "high"])
     b.add_argument("--poll", type=float, default=30.0, help="seconds between batch status checks")
     b.add_argument("--label", default="", help="suffix for the pilot summary's file name")
+    b.add_argument("--draft-model", choices=sorted(MODELS_BY_NAME), help="model for the draft only")
+    b.add_argument("--draft-effort", choices=["low", "medium", "high"], help="effort for the draft only")
+    b.add_argument("--paragraphs", type=int, help="length target for the memo, in paragraphs")
     b.add_argument("--env-file", type=Path, default=ENV_FILE)
     b.set_defaults(fn=cmd_batch)
     sub.add_parser("runs").set_defaults(fn=cmd_runs)

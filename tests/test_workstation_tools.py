@@ -95,6 +95,10 @@ def test_claude_client_routes_roles_validates_and_costs():
         llm.complete_json(role="filing_analyst", task="t", inputs={}, schema=ResearchNotes)
     assert client.params[1]["model"] == "claude-sonnet-5-5"
     assert p["max_tokens"] == 32000 and llm.params("orchestrator_draft", "t", {}, Plan)["max_tokens"] == 64000
+    cheap = ClaudeLLM(client, models={"orchestrator_draft": "claude-sonnet-5-5"}, efforts={"orchestrator_draft": "medium"})
+    assert cheap.params("orchestrator_plan", "t", {}, Plan) == llm.params("orchestrator_plan", "t", {}, Plan)
+    d = cheap.params("orchestrator_draft", "t", {}, Plan)
+    assert d["model"] == "claude-sonnet-5-5" and d["output_config"]["effort"] == "medium"
     assert llm.training_cutoff == date(2026, 7, 1)
 
 

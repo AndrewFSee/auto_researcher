@@ -22,6 +22,7 @@ MODELS = {
     "orchestrator_draft": "claude-opus-5-5",
     "filing_analyst": "claude-sonnet-5-5",
     "bear_analyst": "claude-sonnet-5-5",
+    "verifier": "claude-sonnet-5-5",
 }
 # USD per million tokens (platform.claude.com pricing, read 2026-11-21).
 PRICES = {
@@ -111,10 +112,11 @@ DRAFT_MAX_TOKENS = 64000
 
 class ClaudeLLM:
     def __init__(self, client: Any, models: dict[str, str] | None = None, effort: str = "high",
-                 max_tokens: int = 32000) -> None:
+                 max_tokens: int = 32000, efforts: dict[str, str] | None = None) -> None:
         self.client = client
         self.models = {**MODELS, **(models or {})}
         self.effort, self.max_tokens = effort, max_tokens
+        self.efforts = efforts or {}   # per-role overrides of ``effort``
         self.model = ",".join(f"{r}={m}" for r, m in sorted(self.models.items()))
         cutoffs = [TRAINING_CUTOFF.get(m) for m in self.models.values()]
         self.training_cutoff = None if None in cutoffs else max(c for c in cutoffs if c)
@@ -127,7 +129,7 @@ class ClaudeLLM:
             "system": [{"type": "text", "text": PREAMBLE + task, "cache_control": {"type": "ephemeral"}}],
             "messages": [{"role": "user", "content": render_inputs(inputs)}],
             "thinking": {"type": "adaptive"},
-            "output_config": {"effort": self.effort, "format": {"type": "json_schema", "schema": strict_schema(schema)}},
+            "output_config": {"effort": self.efforts.get(role, self.effort), "format": {"type": "json_schema", "schema": strict_schema(schema)}},
         }
 
     def complete_json(self, *, role: str, task: str, inputs: dict[str, Any], schema: type[T]) -> T:

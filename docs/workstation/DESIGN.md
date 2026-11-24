@@ -229,9 +229,34 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
    Second, one JPM redraft spent its 32k output tokens, most of them on thinking, and was
    cut off; drafts now get 64k (`DRAFT_MAX_TOKENS`).
 
-   Unsupported wording is still checked by no code. The next step is a verifier that
-   reads each paragraph against its cited quotes, measured first against your 181
-   marks.
+   **Verifier** (`verify.py`, `scripts/workstation_verify.py`). A Sonnet 5.5 call reads
+   each analysis paragraph against only what it cites: the verified quotes (never a
+   claim's wording), values with their definitions and dates, and calculations with
+   their inputs. It returns a verdict per paragraph (right, over or wrong) and the
+   sentences at fault. Measured on the ten memos you reviewed, at $0.61 for all ten,
+   it flagged:
+   * 13 of your 15 overstated paragraphs;
+   * 24 of 55 borderline ones (right with a note);
+   * 22 of 111 clean ones, mostly strict "no cited quote says this" findings.
+
+   Its four "wrong" verdicts are paragraphs you marked right whose notes name the same
+   error (a reversed P/E direction, and "tight credit" three times). It is advisory: it
+   raises `unsupported_statement` flags, which do not block, and it is not yet a step of
+   the workflow.
+
+   **Draft A/B**, judged by the verifier. Plans and filing reads are shared, from cache.
+   Costs are per memo at batch prices, including the cached calls.
+
+   | | words | cost | blocked | paragraphs flagged | issues per memo |
+   |---|---|---|---|---|---|
+   | Original (Opus) | 2,208 | $0.38 | 0 | 33% | 7.2 |
+   | Opus, review fixes | 2,408 | $0.48 | 1 | 17% | 3.4 |
+   | Sonnet, medium, about 12 paragraphs | 1,035 | $0.21 | 5 | 27% | 3.7 |
+
+   A caveat: the verifier reads the same definitions the fixed drafter now gets, so part
+   of the drop may be the two agreeing rather than the memo being better. Sonnet's five
+   blocked memos are real number-gate catches: figures that appear only in a claim's
+   wording or in an uncited claim's quote, and a ratio it computed itself.
 4. **Extensions:** point-in-time scoring; peer comparison (several tickers); an MCP
    server exposing the tools so Claude Code and the desktop app can use them;
    study memos (option B: hypothesis, pre-registration, test) on the same skeleton.
