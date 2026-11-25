@@ -302,6 +302,35 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
    of the drop may be the two agreeing rather than the memo being better. Sonnet's five
    blocked memos are real number-gate catches: figures that appear only in a claim's
    wording or in an uncited claim's quote, and a ratio it computed itself.
+
+   **The reviewer's marks on the verified memos** (2026-11-25, a blind page built with
+   `scripts/workstation_review.py --blind`, which hides the verifier's flags):
+
+   | | First pilot (original) | Verified run |
+   |---|---|---|
+   | Analysis paragraphs | 181 | 116 |
+   | Marked over (or unsure) | 15 (8%) | 4 (3%): 3 over, 1 unsure |
+   | Over or borderline (a "right" with a note) | 70 (39%) | 16 (14%) |
+   | Over or borderline, per memo | 7.0 | 1.6 |
+   | Memos rated useful / need edits | 3 / 7 | 9 / 1 |
+
+   - This measures every change since the first pilot together: the definitions and
+     drafting rules, the split fix, 12 paragraphs, repair and the verifier step. The
+     drafts before the verifier step were not marked, so its own share is unknown.
+   - 4 of the 16 notes concern evidence the review page did not show: each value's
+     definition (the VRP's 21-day realized window) and period (market cap's share-count
+     date). The memos had these right.
+   - The verifier did not agree with the reviewer on what is left. Its 4 remaining
+     flags are none of the reviewer's 16. One is a false alarm: the quotes hold the
+     JNJ figures it called unsupported. HD p12's tariff point is cited in other
+     paragraphs. The other two are strict but defensible: CAT's buyback attribution,
+     and NEE's rate-agreement framing. It missed all 3 paragraphs the reviewer marked
+     over. All three are headlines stated more strongly than the paragraph's own
+     figures (CAT p8, HD p5, JNJ p7).
+   - The most common real issue left is mixed periods inside one paragraph: a 9-month
+     tax rate against TTM margins, Q2 items against H1 totals, and a Q2 gain over
+     six-month revenue in a calculation (AAPL p4/p8, XOM p4/p10, JPM p3).
+   - The verifier's flags stay advisory.
 4. **Extensions:** point-in-time scoring; peer comparison (several tickers); an MCP
    server exposing the tools so Claude Code and the desktop app can use them;
    study memos (option B: hypothesis, pre-registration, test) on the same skeleton.
