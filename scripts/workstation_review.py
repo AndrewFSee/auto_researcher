@@ -29,7 +29,11 @@ RUNS = ROOT / "data" / "workstation" / "runs"
 OUT = ROOT / "data" / "workstation" / "review"
 
 
-def memo_data(row: dict) -> dict:
+# The verifier's findings: left off the page with --blind, so the reviewer's marks test it.
+VERIFIER_FLAGS = {"unsupported_statement"}
+
+
+def memo_data(row: dict, hide: set[str] = frozenset()) -> dict:
     folder = RUNS / row["run"]
     packet = json.loads((folder / "packet.json").read_text(encoding="utf-8"))
     state = json.loads((folder / "state.json").read_text(encoding="utf-8"))
@@ -48,26 +52,30 @@ def memo_data(row: dict) -> dict:
                         for m in p["metrics"]],
             "context": [{k: x.get(k) for k in ("id", "name", "value", "unit", "source", "as_of", "track_record")}
                         for x in p["context"]],
-            "flags": [{"code": f["code"], "message": f["message"]} for f in p["flags"]],
+            "flags": [{"code": f["code"], "message": f["message"]} for f in p["flags"] if f["code"] not in hide],
         })
     return {"ticker": row["ticker"], "run": row["run"], "title": packet["title"], "cost": round(cost, 4),
             "drafts": row.get("drafts", len(state["drafts"])), "paragraphs": paragraphs,
             "flags": [{"code": f["code"], "ref": f.get("ref"), "message": f["message"], "blocking": BLOCKING[f["code"]]}
-                      for f in packet["flags"]],
+                      for f in packet["flags"] if f["code"] not in hide],
             "omitted": packet["omitted_claims"], "dropped": packet["dropped_claims"], "gaps": packet["gaps"]}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     ap.add_argument("pilot", type=Path)
+    ap.add_argument("--blind", action="store_true", help="leave the verifier's advisory flags off the page")
+    ap.add_argument("--title", default="Memo Review Desk", help="the page's title")
     ap.add_argument("--spent", type=float, help="total spent on the pilot's runs, if more than these memos cost")
     args = ap.parse_args()
     pilot = json.loads(args.pilot.read_text(encoding="utf-8"))
-    memos = [memo_data(r) for r in pilot["memos"] if r.get("run")]
+    hide = VERIFIER_FLAGS if args.blind else set()
+    memos = [memo_data(r, hide) for r in pilot["memos"] if r.get("run")]
     cost = sum(m["cost"] for m in memos)
     data = {"as_of": pilot["as_of"], "cost": round(cost, 2), "spent": args.spent, "memos": memos}
     blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     html = TEMPLATE.read_text(encoding="utf-8").replace("/*DATA*/", blob)
+    html = html.replace("<title>Memo Review Desk</title>", f"<title>{args.title}</title>", 1)
     OUT.mkdir(parents=True, exist_ok=True)
     out = OUT / f"{args.pilot.stem}.html"
     out.write_text(html, encoding="utf-8")
