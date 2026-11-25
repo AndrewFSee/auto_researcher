@@ -8,6 +8,7 @@ first draft's flags stay in the audit log.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 
 from . import gates
 from .calc import run_calculations
@@ -15,6 +16,7 @@ from .agents import BEAR_TASK, FILING_TASK, BearCaseAnalyst, ContextAnalyst, Dat
 from .llm import LLM
 from .packet import ReviewPacket, build_packet
 from .repair import REPAIR_TASK, apply_repair, repairable
+from .verify import Verification, Verifier, to_flags
 from .schemas import SCHEMA_VERSION, Claim, Document, DraftMemo, Flag, MemoRepair, Plan, Request
 from .state import WorkflowState
 from .tools.base import ContextTool, FilingTool, MetricTool
@@ -86,10 +88,13 @@ def _claim_inputs(claims: dict[str, Claim], documents: dict[str, Document]) -> l
 
 class Workstation:
     def __init__(self, llm: LLM, filings: FilingTool, metrics: MetricTool, context: ContextTool,
-                 max_redrafts: int = 1, paragraphs: int | None = None, repair: bool = True) -> None:
+                 max_redrafts: int = 1, paragraphs: int | None = None, repair: bool = True,
+                 verify: bool = False) -> None:
         # A failed draft is repaired (only the paragraphs its checks name) or, with
         # repair=False, redrafted whole; max_redrafts bounds either.
         self.llm, self.max_redrafts, self.repair = llm, max_redrafts, repair
+        # verify: after the gates pass, the verifier's faults go to one repair (advisory flags).
+        self.verify = verify
         # A length target for the memo (the draft is most of a memo's cost); None: no target.
         self.draft_task = DRAFT_TASK + (f" Keep the memo to about {paragraphs} paragraphs in all, including the "
                                         "limitations paragraphs: cover what matters most and drop the rest."
@@ -136,18 +141,31 @@ class Workstation:
                     "gaps": [*notes.gaps, *bear.gaps],
                     "input_flags": _input_flags(state.flags, {m.id: m.name for m in state.metrics})}
 
-        def check(memo: DraftMemo, attempt: int) -> list[Flag]:
+        def check(memo: DraftMemo, stage: str) -> list[Flag]:
             calcs, errors = run_calculations(memo.calculations, state.metrics, state.context, claims, request.as_of)
             state.write("calculator", "calculations", calcs)
-            flags = [Flag(code="calculation_error", ref=cid, stage=f"memo_draft_{attempt}",
+            flags = [Flag(code="calculation_error", ref=cid, stage=stage,
                           message=f"calculation {cid} failed: {err}") for cid, err in errors.items()]
             return flags + gates.check_memo(memo, request, claims, dropped, [*state.metrics, *calcs], state.context,
-                                            stage=f"memo_draft_{attempt}", documents=state.documents)
+                                            stage=stage, documents=state.documents)
+
+        def repair(memo: DraftMemo, problems: list[str], allowed: set[str], draft: int) -> DraftMemo:
+            fix = self.llm.complete_json(
+                role="orchestrator_repair", task=REPAIR_TASK + DRAFT_TASK, schema=MemoRepair,
+                inputs={**evidence, "memo": [{"ref": f"p{i}", **p.model_dump(mode="json")}
+                                             for i, p in enumerate(memo.paragraphs, 1)],
+                        "calculations": [c.model_dump(mode="json") for c in memo.calculations],
+                        "omitted_claims": [o.model_dump(mode="json") for o in memo.omitted_claims],
+                        "problems": problems})
+            fixed, refused = apply_repair(memo, fix, allowed)
+            state.log("orchestrator", "draft_repaired", draft=draft, fixed=[f.ref for f in fix.fixes],
+                      dropped=fix.drop, added=len(fix.added), refused=refused)
+            return fixed
 
         memo = self.llm.complete_json(role="orchestrator_draft", task=self.draft_task, schema=DraftMemo,
                                       inputs={**evidence, "feedback": []})
         state.write("orchestrator", "draft_memo", memo)
-        memo_flags = check(memo, 1)
+        memo_flags = check(memo, "memo_draft_1")
         for attempt in range(2, self.max_redrafts + 2):
             if not any(f.blocking for f in memo_flags):
                 break
@@ -155,24 +173,57 @@ class Workstation:
                       flags=[f.model_dump(mode="json") for f in memo_flags])
             feedback = [f"{f.code} ({f.ref}): {f.message}" for f in memo_flags if f.blocking]
             if self.repair:
-                fix = self.llm.complete_json(
-                    role="orchestrator_repair", task=REPAIR_TASK + DRAFT_TASK, schema=MemoRepair,
-                    inputs={**evidence, "memo": [{"ref": f"p{i}", **p.model_dump(mode="json")}
-                                                 for i, p in enumerate(memo.paragraphs, 1)],
-                            "calculations": [c.model_dump(mode="json") for c in memo.calculations],
-                            "omitted_claims": [o.model_dump(mode="json") for o in memo.omitted_claims],
-                            "problems": feedback})
-                memo, refused = apply_repair(memo, fix, repairable(memo_flags))
-                state.log("orchestrator", "draft_repaired", draft=attempt, fixed=[f.ref for f in fix.fixes],
-                          dropped=fix.drop, added=len(fix.added), refused=refused)
+                memo = repair(memo, feedback, repairable(memo_flags), attempt)
             else:
                 memo = self.llm.complete_json(role="orchestrator_draft", task=self.draft_task, schema=DraftMemo,
                                               inputs={**evidence, "feedback": feedback})
             state.write("orchestrator", "draft_memo", memo)
-            memo_flags = check(memo, attempt)
+            memo_flags = check(memo, f"memo_draft_{attempt}")
+
+        if self.verify and not any(f.blocking for f in memo_flags):
+            memo, memo_flags = self._verify(state, memo, memo_flags, claims, check, repair)
         state.add_flags("gate", memo_flags)
         calls = getattr(self.llm, "calls", None)
         if calls and isinstance(calls[0], dict) and "usage" in calls[0]:
             state.log("orchestrator", "llm_usage", calls=calls, cost=round(sum(c["cost"] or 0 for c in calls), 4))
         state.log("orchestrator", "packet_built", drafts=len(state.drafts))
         return build_packet(state, claims, dropped), state
+
+    def _verify(self, state: WorkflowState, memo: DraftMemo, memo_flags: list[Flag], claims: dict[str, Claim],
+                check: Callable[[DraftMemo, str], list[Flag]],
+                repair: Callable[[DraftMemo, list[str], set[str], int], DraftMemo]) -> tuple[DraftMemo, list[Flag]]:
+        """Verify a memo that passed the gates; repair the paragraphs the verifier faults,
+        once; keep the repair only if it still passes the gates; re-verify what changed.
+        Returns the memo and its flags, the verifier's findings as advisory flags."""
+        def verify(m: DraftMemo, only: set[str] | None = None) -> Verification:
+            v = Verifier(self.llm).run(m, claims, [*state.metrics, *state.calculations], state.context,
+                                       state.documents, state.request.as_of.isoformat(), only)
+            state.write("verifier", "verification", v)
+            return v
+
+        first = verify(memo)
+        faulted = {p.ref: p for p in first.paragraphs if p.verdict != "right"}
+        if not faulted:
+            return memo, memo_flags
+        problems = [f"{f.code} ({f.ref}): {f.message}" for f in to_flags(first)]
+        fixed = repair(memo, problems, set(faulted), len(state.drafts) + 1)
+        fixed_flags = check(fixed, "memo_verified")
+        if any(f.blocking for f in fixed_flags):
+            # The verifier cannot make a memo fail its gates: keep the version that passed.
+            state.log("orchestrator", "verifier_repair_reverted",
+                      flags=[f.model_dump(mode="json") for f in fixed_flags if f.blocking])
+            check(memo, "memo_verified")   # its calculations again
+            return memo, memo_flags + to_flags(first)
+        state.write("orchestrator", "draft_memo", fixed)
+        # Paragraphs the repair left as they were keep their findings, under their new refs.
+        before = {f"p{i}": p for i, p in enumerate(memo.paragraphs, 1)}
+        moved, changed = {}, set()
+        for i, p in enumerate(fixed.paragraphs, 1):
+            old = next((r for r, q in before.items() if q == p and r not in moved), None)
+            if old is None:
+                changed.add(f"p{i}")
+            else:
+                moved[old] = f"p{i}"
+        second = verify(fixed, changed) if changed else Verification(paragraphs=[])
+        kept = [c.model_copy(update={"ref": moved[r]}) for r, c in faulted.items() if r in moved]
+        return fixed, fixed_flags + to_flags(Verification(paragraphs=[*kept, *second.paragraphs]))

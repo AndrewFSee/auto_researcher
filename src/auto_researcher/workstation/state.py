@@ -22,6 +22,7 @@ WRITERS: dict[str, str] = {
     "metrics": "data",
     "context": "context",
     "calculations": "calculator",
+    "verification": "verifier",
 }
 DOCUMENT_WRITERS = {"filing", "bear"}
 
@@ -40,6 +41,8 @@ class WorkflowState:
         self.calculations: list[Metric] = []    # the latest draft's calculations, evaluated by code
         self.draft_memo: DraftMemo | None = None
         self.drafts: list[DraftMemo] = []          # every draft, superseded ones included
+        self.verification: BaseModel | None = None  # the verifier's latest check (verify.Verification)
+        self.verifications: list[BaseModel] = []    # every check, in order
         self._flags: list[Flag] = []
         self.audit: list[dict[str, Any]] = []
 
@@ -50,6 +53,8 @@ class WorkflowState:
         setattr(self, slot, value)
         if slot == "draft_memo":
             self.drafts.append(value)
+        if slot == "verification":
+            self.verifications.append(value)
         self.log(role, f"wrote_{slot}")
 
     def add_documents(self, role: str, docs: list[Document]) -> None:
@@ -105,4 +110,4 @@ class WorkflowState:
                 "documents": dump(self.documents), "research_notes": dump(self.research_notes), "retrieval": self.retrieval,
                 "bear_notes": dump(self.bear_notes), "metrics": dump(self.metrics), "context": dump(self.context),
                 "calculations": dump(self.calculations),
-                "drafts": dump(self.drafts), "flags": dump(list(self._flags)), "audit": self.audit}
+                "drafts": dump(self.drafts), "verifications": dump(self.verifications), "flags": dump(list(self._flags)), "audit": self.audit}

@@ -70,13 +70,14 @@ def _context_view(c: ContextItem) -> dict[str, Any]:
 
 
 def verify_inputs(memo: DraftMemo, claims: dict[str, Claim], metrics: list[Metric], context: list[ContextItem],
-                  documents: dict[str, Document]) -> list[dict[str, Any]]:
-    """Each analysis paragraph with its cited evidence. Limitations paragraphs cite nothing
-    and state no figures, so they are not checked."""
+                  documents: dict[str, Document], only: set[str] | None = None) -> list[dict[str, Any]]:
+    """Each analysis paragraph (or those whose refs are in ``only``) with its cited
+    evidence. Limitations paragraphs cite nothing and state no figures, so they are not
+    checked."""
     m_by_id, c_by_id = {m.id: m for m in metrics}, {c.id: c for c in context}
     out = []
     for i, p in enumerate(memo.paragraphs, 1):
-        if p.kind == "limitations":
+        if p.kind == "limitations" or (only is not None and f"p{i}" not in only):
             continue
         quotes = []
         for cid in p.claim_ids:
@@ -106,8 +107,10 @@ class Verifier:
         self.llm = llm
 
     def run(self, memo: DraftMemo, claims: dict[str, Claim], metrics: list[Metric], context: list[ContextItem],
-            documents: dict[str, Document], as_of: str) -> Verification:
-        paragraphs = verify_inputs(memo, claims, metrics, context, documents)
+            documents: dict[str, Document], as_of: str, only: set[str] | None = None) -> Verification:
+        paragraphs = verify_inputs(memo, claims, metrics, context, documents, only)
+        if not paragraphs:
+            return Verification(paragraphs=[])
         return self.llm.complete_json(role="verifier", task=VERIFY_TASK, schema=Verification,
                                       inputs={"as_of": as_of, "paragraphs": paragraphs})
 

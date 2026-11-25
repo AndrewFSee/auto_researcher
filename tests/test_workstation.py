@@ -386,3 +386,45 @@ def test_calculations_may_use_earlier_calculations_in_any_order():
     from auto_researcher.workstation.schemas import DraftMemo
     memo = DraftMemo.model_validate(draft([para("EQ", "Conversion of 0.839 doubled is 1.678.", metrics=["c2"])]))
     assert check_memo(memo, Request(ticker="ACME", as_of=AS_OF, question="q"), {}, {}, [*METRICS, *got], []) == []
+
+
+
+def _verified(verifier, repairs=None, drafts=None):
+    replies = {"orchestrator_plan": PLAN, "filing_analyst": FILING, "bear_analyst": BEAR,
+               "orchestrator_draft": drafts or [draft()], "verifier": verifier}
+    if repairs:
+        replies["orchestrator_repair"] = repairs
+    llm = ScriptedLLM(replies)
+    ws = Workstation(llm, FixtureFilings([MDA, RISKS]), FixtureMetrics(METRICS), FixtureContext([MACRO]), verify=True)
+    packet, state = ws.run(Request(ticker="ACME", as_of=AS_OF, question="q"))
+    return packet, state, llm
+
+
+OVER_P3 = {"paragraphs": [{"ref": "p3", "verdict": "over", "issues": [
+    {"kind": "unsupported", "sentence": "The largest customer is about 18% of net sales.", "why": "says 'about'"}]}]}
+RIGHT = {"paragraphs": []}
+
+
+def test_the_verifiers_faults_are_repaired_and_only_changed_paragraphs_rechecked():
+    fixed_p3 = para("Downside risks", "The largest customer accounted for approximately 18% of net sales in 2025.",
+                    ["b1"])
+    packet, state, llm = _verified([OVER_P3, RIGHT], repairs=[{"fixes": [{"ref": "p3", "paragraph": fixed_p3}]}])
+    assert codes(packet) == [] and state.drafts[-1].paragraphs[2].text.startswith("The largest customer accounted")
+    checks = [c for c in llm.calls if c["role"] == "verifier"]
+    assert len(checks) == 2 and checks[1]["inputs"]["paragraphs"][0]["ref"] == "p3"
+    assert [p["ref"] for p in checks[1]["inputs"]["paragraphs"]] == ["p3"]
+    assert len(state.verifications) == 2
+
+
+def test_a_verifier_repair_that_breaks_the_gates_is_reverted_and_the_finding_stays():
+    bad_p3 = para("Downside risks", "The largest customer is about 25% of net sales.", ["b1"])
+    packet, state, llm = _verified([OVER_P3], repairs=[{"fixes": [{"ref": "p3", "paragraph": bad_p3}]}])
+    assert codes(packet) == ["unsupported_statement"] and not packet.review_required
+    assert state.drafts[-1].paragraphs[2].text == GOOD[2]["text"]
+    assert any(e["event"] == "verifier_repair_reverted" for e in state.audit)
+    assert sum(c["role"] == "verifier" for c in llm.calls) == 1
+
+
+def test_no_findings_no_repair():
+    packet, state, llm = _verified([RIGHT])
+    assert codes(packet) == [] and not any(c["role"] == "orchestrator_repair" for c in llm.calls)

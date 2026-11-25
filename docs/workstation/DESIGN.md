@@ -281,6 +281,23 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
    NEE is 4 of 12 unrepaired against 2 of 12 redrafted. The first draft is now most of
    the cost, about $0.21 a memo.
 
+   **The verifier as a workflow step** (`Workstation(verify=True)`, on by default in
+   `scripts/workstation.py`; `--no-verify` skips it):
+   1. Once a memo passes the gates, the verifier reads it.
+   2. The paragraphs it faults go to the same repair, once.
+   3. The repaired memo is checked against the gates again. If any gate now blocks, the
+      memo that passed is kept, so the verifier cannot make a memo fail its gates.
+   4. Only the paragraphs that changed are verified again.
+   5. What remains becomes advisory `unsupported_statement` flags on the packet.
+
+   On the 2026-10-15 pilot, from the same cached drafts: the verifier faulted 17 of 116
+   analysis paragraphs, and after one repair 4 remain. No repair was reverted, and all
+   ten memos pass. The step costs about $0.12 a memo (verify, repair, re-verify), so a memo
+   costs about $0.50 at batch prices.
+
+   The verifier grades the paragraphs it had repaired, so "4 remain" is not an
+   independent measure. A reviewer's marks on these memos are the test.
+
    A caveat: the verifier reads the same definitions the fixed drafter now gets, so part
    of the drop may be the two agreeing rather than the memo being better. Sonnet's five
    blocked memos are real number-gate catches: figures that appear only in a claim's
