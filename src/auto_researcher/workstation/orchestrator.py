@@ -16,7 +16,7 @@ from .agents import BEAR_TASK, FILING_TASK, BearCaseAnalyst, ContextAnalyst, Dat
 from .llm import LLM
 from .packet import ReviewPacket, build_packet
 from .repair import REPAIR_TASK, apply_repair, repairable
-from .verify import Verification, Verifier, to_flags
+from .verify import VERIFY_TASK, Verification, Verifier, to_flags
 from .schemas import SCHEMA_VERSION, Claim, Document, DraftMemo, Flag, MemoRepair, Plan, Request
 from .state import WorkflowState
 from .tools.base import ContextTool, FilingTool, MetricTool
@@ -57,7 +57,7 @@ INPUT_FLAGS = ("missing_input", "stale_input", "llm_lookahead")
 
 
 def prompt_version(draft_task: str = DRAFT_TASK) -> str:
-    return hashlib.sha256("\n".join([PLAN_TASK, draft_task, REPAIR_TASK, FILING_TASK, BEAR_TASK]).encode()).hexdigest()[:8]
+    return hashlib.sha256("\n".join([PLAN_TASK, draft_task, REPAIR_TASK, FILING_TASK, BEAR_TASK, VERIFY_TASK]).encode()).hexdigest()[:8]
 
 
 def _input_flags(flags: tuple[Flag, ...], metric_names: dict[str, str]) -> list[str]:

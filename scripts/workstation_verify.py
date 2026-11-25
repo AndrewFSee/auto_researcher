@@ -7,7 +7,7 @@ often it agrees with them.
 
 Each memo's final draft is checked through the Message Batches API (Sonnet 5.5; half
 price; replies cached, so a rerun costs nothing). Results go to
-data/workstation/verify/<run>.json. Saved runs are never changed. Runs made before
+data/workstation/verify/<run>.json (or <label>/<run>.json). Saved runs are never changed. Runs made before
 metrics and context items carried definitions get them from the tools' catalogues, by
 name: they are fixed text, not data of the run.
 
@@ -95,7 +95,7 @@ def agreement(results: dict[str, Verification], marks_dir: Path) -> None:
             table[(h, p.verdict)] += 1
             if h == "over" and p.verdict == "right":
                 misses.append((run, p.ref, marks[p.ref].get("note", "")))
-    humans = ["right", "borderline", "over", "wrong"]
+    humans = ["right", "borderline", "unsure", "over", "wrong"]
     print("\nreviewer (rows) vs verifier (columns)")
     print(f"{'':12s}{'right':>8s}{'over':>8s}{'wrong':>8s}")
     for h in humans:
@@ -117,6 +117,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
     ap.add_argument("pilot", type=Path)
     ap.add_argument("--marks", type=Path, help="folder of the review page's mark documents, one per run")
+    ap.add_argument("--label", help="write to data/workstation/verify/<label>/, keeping earlier results")
     ap.add_argument("--effort", default="high", choices=["low", "medium", "high"])
     ap.add_argument("--poll", type=float, default=30.0)
     ap.add_argument("--env-file", type=Path, default=ENV_FILE)
@@ -137,7 +138,8 @@ def main() -> None:
         return go
 
     got = batcher.run([job(r) for r in runs])
-    OUT.mkdir(parents=True, exist_ok=True)
+    out = OUT / args.label if args.label else OUT
+    out.mkdir(parents=True, exist_ok=True)
     results: dict[str, Verification] = {}
     for run, res in zip(runs, got):
         cost = llms[run].cost
@@ -145,7 +147,7 @@ def main() -> None:
             print(f"{run}: FAILED ({res}) ${cost:.3f}")
             continue
         results[run] = res
-        (OUT / f"{run}.json").write_text(json.dumps({"run": run, "calls": llms[run].calls,
+        (out / f"{run}.json").write_text(json.dumps({"run": run, "calls": llms[run].calls,
                                                      **res.model_dump(mode="json")}, indent=1), encoding="utf-8")
         v = Counter(p.verdict for p in res.paragraphs)
         print(f"{run}: {dict(v)}  ${cost:.3f}")

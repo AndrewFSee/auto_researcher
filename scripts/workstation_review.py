@@ -48,9 +48,9 @@ def memo_data(row: dict, hide: set[str] = frozenset()) -> dict:
         paragraphs.append({
             "ref": p["ref"], "section": p["section"], "kind": kind, "text": p["text"],
             "claims": [{"id": c["id"], "role": c["role"], "text": c["text"], "quotes": c["quotes"]} for c in p["claims"]],
-            "metrics": [{k: m.get(k) for k in ("id", "name", "value", "unit", "source", "as_of", "available_date")}
+            "metrics": [{k: m.get(k) for k in ("id", "name", "value", "unit", "source", "as_of", "available_date", "period", "definition")}
                         for m in p["metrics"]],
-            "context": [{k: x.get(k) for k in ("id", "name", "value", "unit", "source", "as_of", "track_record")}
+            "context": [{k: x.get(k) for k in ("id", "name", "value", "unit", "source", "as_of", "track_record", "definition")}
                         for x in p["context"]],
             "flags": [{"code": f["code"], "message": f["message"]} for f in p["flags"] if f["code"] not in hide],
         })
