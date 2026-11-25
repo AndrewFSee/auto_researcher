@@ -331,6 +331,28 @@ reviewed. Runs are written once; a revision is a new run that names its parent.
      tax rate against TTM margins, Q2 items against H1 totals, and a Q2 gain over
      six-month revenue in a calculation (AAPL p4/p8, XOM p4/p10, JPM p3).
    - The verifier's flags stay advisory.
+
+   **A headline rule for the verifier** (2026-11-25). The verifier's task now says a
+   paragraph's opening sentence is checked on its own against the paragraph's figures.
+   Three versions were run on both marked sets (`scripts/workstation_verify.py --label`;
+   about $1.24 a run at batch prices). The cells show how many of each mark the
+   verifier flagged:
+
+   | Version | First pilot: over / borderline / clean | Verified run: over / borderline / clean |
+   |---|---|---|
+   | Old prompt | 13/15, 24/55, 22/111 (20%) | 0/3, 0/12, 4/100 (in the workflow) |
+   | Broad: also "a judgment or ranking stated as fact" | 15/15, 36/55, 42/111 (38%) | 3/3, 1/12, 18/100 |
+   | Narrow (kept): "figures do not bear it out or cut against it", or "a cause shown only in part"; "a ranking or judgment the figures are consistent with is not a problem" | 14/15, 27/55, 31/111 (28%) | 1/3, 2/12, 9/100 |
+
+   - The broad version flagged ordinary rankings such as "Talc is the largest
+     unquantified risk". The narrow version still misses JNJ p7 and HD p5.
+   - The rule was written after seeing the verified run's three misses, so that column
+     is in-sample. Each version was run once, and run-to-run variation is unmeasured.
+   - With 3 overs in the verified run, a difference of 1 or 2 paragraphs is within
+     noise.
+   - What holds across all three versions: on the first pilot they catch nearly every
+     paragraph marked over, while also flagging a fifth to two-fifths of the clean
+     ones.
 4. **Extensions:** point-in-time scoring; peer comparison (several tickers); an MCP
    server exposing the tools so Claude Code and the desktop app can use them;
    study memos (option B: hypothesis, pre-registration, test) on the same skeleton.
