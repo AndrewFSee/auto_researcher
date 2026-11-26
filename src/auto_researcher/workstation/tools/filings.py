@@ -22,7 +22,7 @@ import pyarrow.dataset as ds
 from ...llm.retrieval import BM25, tokenize
 from ..schemas import Document
 
-LAKE = Path(r"C:\Users\andre\projects\sentiq\data\lake\items\src=edgar_periodic")
+LAKE = Path(__file__).resolve().parents[5] / "sentiq" / "data" / "lake" / "items" / "src=edgar_periodic"   # sibling project
 PASSAGE_CHARS = 2500
 LOOKBACK_DAYS = 500   # enough to reach the last 10-K from any date
 SECTION_TITLES = {

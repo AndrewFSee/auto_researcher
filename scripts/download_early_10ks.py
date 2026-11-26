@@ -39,7 +39,7 @@ from auto_researcher.console import use_utf8_output  # noqa: E402
 
 logger = logging.getLogger("download_early_10ks")
 
-SENTIQ = Path(r"C:\Users\andre\projects\sentiq")
+SENTIQ = ROOT.parent / "sentiq"   # sibling project
 MEMBERS = SENTIQ / "data" / "ref" / "universe" / "sp500_members.parquet"
 TICKERS = SENTIQ / "data" / "ref" / "company_tickers.json"
 OUT = ROOT / "data" / "customers" / "early_10k"

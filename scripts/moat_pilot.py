@@ -81,7 +81,7 @@ from auto_researcher.data.sec_fundamentals import FACTS_URL, ITEMS, build_pit_ta
 logger = logging.getLogger("moat_pilot")
 
 DATA = ROOT / "data" / "moat"
-SENTIQ = Path(r"C:\Users\andre\projects\sentiq\data")
+SENTIQ = ROOT.parent / "sentiq" / "data"   # sibling project
 LAKE = SENTIQ / "lake" / "items" / "src=edgar_periodic"
 SECTORS = SENTIQ / "ref" / "universe" / "sp500_sectors.parquet"
 FACTS = DATA / "facts"  # SEC company facts by CIK (filings' own CIKs; tickers change)

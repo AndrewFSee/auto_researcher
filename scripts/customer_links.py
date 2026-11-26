@@ -60,7 +60,7 @@ from auto_researcher.llm.moat import chat_json  # noqa: E402
 logger = logging.getLogger("customer_links")
 
 DATA = ROOT / "data" / "customers"
-SENTIQ = Path(r"C:\Users\andre\projects\sentiq\data")
+SENTIQ = ROOT.parent / "sentiq" / "data"   # sibling project
 LAKE = SENTIQ / "lake" / "items" / "src=edgar_periodic"
 TICKERS = SENTIQ / "ref" / "company_tickers.json"  # SEC's list, fetched 2026-10-09
 FILING_INDEX = ROOT / "data" / "filingqa" / "filing_index.json"

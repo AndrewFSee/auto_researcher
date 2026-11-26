@@ -23,7 +23,7 @@ import pyarrow.dataset as ds
 from ...data.sec_fundamentals import FACT_COLUMNS, FORMS, ITEMS, build_pit_table
 from ..schemas import Metric, Unit
 
-TICKERLAKE = Path(r"C:\Users\andre\projects\TickerLake\data")
+TICKERLAKE = Path(__file__).resolve().parents[5] / "TickerLake" / "data"   # sibling project
 FUNDAMENTAL_MAX_AGE = 200   # days from period end: a 10-K can arrive 90 days after year end
 PRICE_MAX_AGE = 5
 MAX_PERIOD_AGE = 400        # older periods count as missing (as in fundamentals_asof)

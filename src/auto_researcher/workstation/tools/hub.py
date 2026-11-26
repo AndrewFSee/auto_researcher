@@ -27,7 +27,7 @@ import pandas as pd
 
 from ..schemas import ContextItem
 
-HUB = Path(r"C:\Users\andre\projects\market-compass\data")
+HUB = Path(__file__).resolve().parents[5] / "market-compass" / "data"   # sibling project
 SNAPSHOT_DAYS = 3
 MACRO_LAG_DAYS = 45   # a month's macro panel row is built after that month's data is released
 

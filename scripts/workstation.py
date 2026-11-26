@@ -42,7 +42,7 @@ PARAGRAPHS = 12
 PARAGRAPHS_HELP = f"length target for the memo, in paragraphs (default {PARAGRAPHS}; 0: none)"
 NO_REPAIR_HELP = "redraft a failed memo whole instead of repairing the paragraphs its checks name"
 NO_VERIFY_HELP = "skip the verifier (which reads each paragraph against what it cites and has its faults repaired)"
-ENV_FILE = Path(r"C:\Users\andre\projects\sentiq\.env")
+ENV_FILE = ROOT.parent / "sentiq" / ".env"   # sibling project
 DEFAULT_QUESTION = ("Pre-investment memo: business and competitive position, earnings quality, balance sheet and "
                     "leverage, valuation, and the main downside risks over the horizon. Flag anything a reviewer "
                     "should check before relying on it.")

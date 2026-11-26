@@ -36,7 +36,7 @@ from auto_researcher.workstation.verify import Verification, Verifier  # noqa: E
 
 RUNS = ROOT / "data" / "workstation" / "runs"
 OUT = ROOT / "data" / "workstation" / "verify"
-ENV_FILE = Path(r"C:\Users\andre\projects\sentiq\.env")
+ENV_FILE = ROOT.parent / "sentiq" / ".env"   # sibling project
 
 
 def _definition_metric(name: str) -> str | None:
